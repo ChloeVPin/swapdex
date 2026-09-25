@@ -1,6 +1,7 @@
 # Swapdex
 
-Swapdex is an add-on for the Codex desktop app.
+Swapdex is an add-on for the Codex desktop app. The app is the only thing it works
+with.
 
 It attaches to the Codex you already have. It never installs Codex, never updates
 Codex, and never changes the app on disk. If you uninstall Swapdex, Codex is exactly
@@ -27,14 +28,18 @@ the profile menu you never use, while Add account and Settings always stay visib
 account is deleted with its stored credentials and Codex keeps running. Removing the
 account you are signed in with signs you out and clears its credentials.
 
-**One account at a time, shared everywhere.** Swapdex stores credentials per account,
-but the account you pick in the app is the one Codex uses. The app and the Codex
-command line tool share the same home, so whichever you open next starts on the account
-you chose. There is nothing to configure and no wrapper in your shell.
+**One account at a time.** Swapdex stores credentials per account, but only one is
+signed in at a time. The account you pick in the app is the account the app runs as,
+and nothing else has to be configured.
+
+**Swapdex is for the Codex desktop app only.** It does not integrate with the Codex
+command line tool. There is no shell wrapper, no slash command, and nothing to install
+into your shell. If you use the command line tool, that is outside what this project
+does and outside what it supports.
 
 **Where account data lives.** Each account gets its own folder in `~/.swapdex-accounts`,
-holding only that account's credentials. The account you pick is copied into the shared
-Codex home, which is what the app and the command line tool both read.
+holding only that account's credentials. The account you pick is copied into the Codex
+home the app reads, so the app signs in as that account.
 
 ## Install
 
@@ -81,6 +86,7 @@ None of these touch Codex itself.
 
 - macOS, Linux, or Windows on a 64 bit machine
 - The official Codex desktop app, already installed and signed in
+- No support for the Codex command line tool
 
 ### What works where
 
