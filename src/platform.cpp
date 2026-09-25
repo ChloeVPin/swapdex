@@ -726,6 +726,27 @@ bool close_unmanaged_chatgpt() {
     return false;
 }
 
+bool make_close_on_exec_pipe(int descriptors[2]) {
+    descriptors[0] = -1;
+    descriptors[1] = -1;
+#if defined(__linux__)
+    return ::pipe2(descriptors, O_CLOEXEC) == 0;
+#else
+    if (::pipe(descriptors) != 0) {
+        return false;
+    }
+    for (const int descriptor : {descriptors[0], descriptors[1]}) {
+        const int flags = ::fcntl(descriptor, F_GETFD);
+        if (flags == -1 || ::fcntl(descriptor, F_SETFD, flags | FD_CLOEXEC) == -1) {
+            ::close(descriptors[0]);
+            ::close(descriptors[1]);
+            return false;
+        }
+    }
+    return true;
+#endif
+}
+
 std::optional<std::int64_t> running_unmanaged_chatgpt(std::int64_t managed_process_group) {
 #if defined(_WIN32)
     const DWORD snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);

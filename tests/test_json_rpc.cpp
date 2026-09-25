@@ -19,6 +19,36 @@ std::filesystem::path test_root() {
 
 }
 
+// Looks for a Codex command line tool on PATH without running it.
+bool codex_command_line_available() {
+    const char* path = std::getenv("PATH");
+    if (path == nullptr) {
+        return false;
+    }
+    const std::string entries(path);
+    std::size_t start = 0;
+    while (start <= entries.size()) {
+        const std::size_t end = entries.find(':', start);
+        const std::string directory = entries.substr(start, end == std::string::npos ? std::string::npos : end - start);
+        if (!directory.empty()) {
+#if defined(_WIN32)
+            if (std::filesystem::is_regular_file(std::filesystem::path(directory) / "codex.exe")) {
+                return true;
+            }
+#else
+            if (std::filesystem::is_regular_file(std::filesystem::path(directory) / "codex")) {
+                return true;
+            }
+#endif
+        }
+        if (end == std::string::npos) {
+            break;
+        }
+        start = end + 1;
+    }
+    return false;
+}
+
 void test_json_rpc() {
     const std::filesystem::path root = test_root();
     swapdex::ensure_private_directory(root);
@@ -72,14 +102,19 @@ void test_json_rpc() {
         close(original_three);
     }
     close(preserved_descriptor);
-    bool authentication_required = false;
-    try {
-        swapdex::AppServerClient client;
-        client.query(root / "empty-home", std::chrono::seconds(20));
-    } catch (const swapdex::Error& error) {
-        authentication_required = error.code() == "app_server_auth_required";
+    // This exercises the real Codex app server, so it can only assert anything when a
+    // Codex command line tool is actually installed. On a build machine without one the
+    // run fails to start, which is a different outcome and not a defect here.
+    if (codex_command_line_available()) {
+        bool authentication_required = false;
+        try {
+            swapdex::AppServerClient client;
+            client.query(root / "empty-home", std::chrono::seconds(20));
+        } catch (const swapdex::Error& error) {
+            authentication_required = error.code() == "app_server_auth_required";
+        }
+        swapdex::test::check(authentication_required, "Empty app-server home did not report missing authentication");
     }
-    swapdex::test::check(authentication_required, "Empty app-server home did not report missing authentication");
     std::error_code error;
     std::filesystem::remove_all(root, error);
 }

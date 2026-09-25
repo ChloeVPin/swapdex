@@ -38,7 +38,11 @@ add_library(swapdex_core
 
 target_include_directories(swapdex_core PUBLIC src)
 target_link_libraries(swapdex_core PUBLIC nlohmann_json::nlohmann_json Threads::Threads)
-target_compile_options(swapdex_core PRIVATE -Wall -Wextra -Wpedantic -Werror)
+if(MSVC)
+    target_compile_options(swapdex_core PRIVATE /W4 /WX)
+else()
+    target_compile_options(swapdex_core PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
 target_compile_definitions(swapdex_core PUBLIC
     SWAPDEX_VERSION="${PROJECT_VERSION}"
 )
@@ -61,17 +65,29 @@ target_compile_definitions(swapdex_core PRIVATE
 
 add_executable(swapdex src/main.cpp)
 target_link_libraries(swapdex PRIVATE swapdex_core)
-target_compile_options(swapdex PRIVATE -Wall -Wextra -Wpedantic -Werror)
+if(MSVC)
+    target_compile_options(swapdex PRIVATE /W4 /WX)
+else()
+    target_compile_options(swapdex PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
 
 include(CTest)
 
 if(BUILD_TESTING)
     add_executable(swapdex_fake_cdp tests/fake_cdp.cpp)
+    if(MSVC)
+    target_compile_options(swapdex_fake_cdp PRIVATE /W4 /WX)
+else()
     target_compile_options(swapdex_fake_cdp PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
 
     add_executable(swapdex_fake_app_server tests/fake_app_server.cpp)
     target_link_libraries(swapdex_fake_app_server PRIVATE nlohmann_json::nlohmann_json)
+    if(MSVC)
+    target_compile_options(swapdex_fake_app_server PRIVATE /W4 /WX)
+else()
     target_compile_options(swapdex_fake_app_server PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
 
     add_executable(swapdex_tests
         tests/test_main.cpp
@@ -82,7 +98,11 @@ if(BUILD_TESTING)
     )
     target_link_libraries(swapdex_tests PRIVATE swapdex_core)
     target_compile_definitions(swapdex_tests PRIVATE SWAPDEX_FAKE_CDP_PATH="$<TARGET_FILE:swapdex_fake_cdp>" SWAPDEX_FAKE_APP_SERVER_PATH="$<TARGET_FILE:swapdex_fake_app_server>")
+    if(MSVC)
+    target_compile_options(swapdex_tests PRIVATE /W4 /WX)
+else()
     target_compile_options(swapdex_tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
     add_dependencies(swapdex_tests swapdex_fake_cdp swapdex_fake_app_server)
     add_test(NAME profile_store COMMAND swapdex_tests profile_store)
     add_test(NAME json_rpc COMMAND swapdex_tests json_rpc)
@@ -105,7 +125,11 @@ if(BUILD_TESTING)
 
     add_executable(swapdex_live_probe EXCLUDE_FROM_ALL tests/live_cdp_probe.cpp)
     target_link_libraries(swapdex_live_probe PRIVATE swapdex_core)
+    if(MSVC)
+    target_compile_options(swapdex_live_probe PRIVATE /W4 /WX)
+else()
     target_compile_options(swapdex_live_probe PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
 endif()
 
 install(TARGETS swapdex RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

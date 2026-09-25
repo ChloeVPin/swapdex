@@ -1,5 +1,7 @@
 #include "app_server.hpp"
 
+#include "platform.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cerrno>
@@ -106,7 +108,7 @@ private:
     void spawn(const std::filesystem::path& executable, const std::filesystem::path& codex_home) {
         int input_pipe[2] = {-1, -1};
         int output_pipe[2] = {-1, -1};
-        if (pipe2(input_pipe, O_CLOEXEC) != 0 || pipe2(output_pipe, O_CLOEXEC) != 0) {
+        if (!platform::make_close_on_exec_pipe(input_pipe) || !platform::make_close_on_exec_pipe(output_pipe)) {
             close_if_open(input_pipe[0]);
             close_if_open(input_pipe[1]);
             close_if_open(output_pipe[0]);

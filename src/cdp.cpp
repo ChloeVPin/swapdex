@@ -1,5 +1,7 @@
 #include "cdp.hpp"
 
+#include "platform.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cerrno>
@@ -47,7 +49,7 @@ void CdpPipe::start() {
     }
     int command_pipe[2] = {-1, -1};
     int response_pipe[2] = {-1, -1};
-    if (pipe2(command_pipe, O_CLOEXEC) != 0 || pipe2(response_pipe, O_CLOEXEC) != 0) {
+    if (!platform::make_close_on_exec_pipe(command_pipe) || !platform::make_close_on_exec_pipe(response_pipe)) {
         close_descriptor(command_pipe[0]);
         close_descriptor(command_pipe[1]);
         close_descriptor(response_pipe[0]);

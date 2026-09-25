@@ -41,6 +41,9 @@ std::filesystem::path chatgpt_executable_name();
 
 // Process discovery, used to refuse starting while a second Codex is already running.
 std::optional<std::int64_t> running_unmanaged_chatgpt(std::int64_t managed_process_group);
+// Creates a pipe with both ends close on exec. pipe2 is Linux only, so macOS builds
+// the same guarantee from pipe plus fcntl.
+bool make_close_on_exec_pipe(int descriptors[2]);
 // Asks a normally launched app to close, then waits briefly for it to go away.
 bool close_unmanaged_chatgpt();
 
