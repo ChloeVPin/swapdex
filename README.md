@@ -53,7 +53,8 @@ irm https://raw.githubusercontent.com/ChloeVPin/swapdex/main/install.ps1 | iex
 ```
 
 That is the whole install. The script picks the build for your machine, installs it,
-and registers it to start when you sign in.
+and registers it to start when you sign in. It downloads a published release, so a
+release has to exist for your platform.
 
 Swapdex does not install Codex. If you do not have it yet, install it from OpenAI
 first, then run the line above. After that, just open Codex as you normally would and
@@ -80,6 +81,26 @@ None of these touch Codex itself.
 
 - macOS, Linux, or Windows on a 64 bit machine
 - The official Codex desktop app, already installed and signed in
+
+### What works where
+
+Swapdex is written for all three, but only one of them has been run on real hardware.
+Please read this before you install it.
+
+| Platform | Status | How it starts |
+| --- | --- | --- |
+| Linux | **Tested daily** on Linux Mint | a systemd user service |
+| macOS | Experimental, not tested on a Mac | a launchd agent |
+| Windows | Experimental, not tested on Windows | a login item |
+
+Linux is the only platform with an end to end test against a signed in app, so that is
+the only one this project calls supported. The macOS and Windows code paths compile and
+are wired up, but the desktop app connection on those platforms still needs work: the
+local browser connection is written against a POSIX process transport that Windows does
+not have. Expect to run into the app not attaching on Windows.
+
+If you are on macOS or Windows and it works for you, that is genuinely useful
+information and an issue describing what happened is welcome.
 
 ## Uninstalling
 

@@ -386,3 +386,26 @@ void test_start_reports_the_truth() {
     std::error_code error;
     std::filesystem::remove_all(root, error);
 }
+
+void test_release_bundle_layout() {
+    // A downloaded release is a flat folder: the binary and the renderer asset sit
+    // together. If the asset cannot be found there, installing from a release fails.
+    namespace fs = std::filesystem;
+    const fs::path root = std::filesystem::temp_directory_path() / ("swapdex-bundle-" + swapdex::random_identifier(6));
+    const fs::path flat = root / "swapdex";
+    swapdex::ensure_private_directory(flat);
+    swapdex::write_file_atomically(flat / "inject.js", "flat bundle\n", std::filesystem::perms::owner_read | std::filesystem::perms::owner_write);
+    const fs::path found = swapdex::locate_source_asset(flat);
+    swapdex::test::check(found == fs::absolute(flat / "inject.js").lexically_normal(), "The asset beside the binary in a release bundle was not found");
+
+    // A source build keeps the asset under assets/.
+    const fs::path source = root / "source";
+    swapdex::ensure_private_directory(source / "assets");
+    swapdex::write_file_atomically(source / "assets" / "inject.js", "source tree\n", std::filesystem::perms::owner_read | std::filesystem::perms::owner_write);
+    swapdex::ensure_private_directory(source / "bin");
+    const fs::path from_source = swapdex::locate_source_asset(source / "bin");
+    swapdex::test::check(from_source == fs::absolute(source / "assets" / "inject.js").lexically_normal(), "The asset in a source tree was not found");
+
+    std::error_code error;
+    fs::remove_all(root, error);
+}

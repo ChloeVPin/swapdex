@@ -802,7 +802,9 @@ void Service::report_status(std::string message) {
 std::string Service::injection_source() const {
     const std::filesystem::path executable_path = std::filesystem::path(executable_directory());
     const std::filesystem::path data_home = std::filesystem::path(environment_value("XDG_DATA_HOME").value_or((home_directory() / ".local" / "share").string()));
-    const std::array<std::filesystem::path, 4> candidates = {
+    const std::array<std::filesystem::path, 5> candidates = {
+        // A downloaded bundle is a flat folder, so the asset sits beside the binary.
+        executable_path / "inject.js",
         data_home / "swapdex" / "inject.js",
         executable_path / ".." / "share" / "swapdex" / "inject.js",
         executable_path / ".." / "assets" / "inject.js",

@@ -10,15 +10,11 @@
 #include "util.hpp"
 
 namespace swapdex {
-namespace {
 
-constexpr std::size_t registration_maximum_bytes = 256U * 1024U;
-constexpr std::size_t manifest_maximum_bytes = 64U * 1024U;
-constexpr std::size_t launcher_maximum_bytes = 64U * 1024U;
-
-std::filesystem::path locate_source_asset() {
-    const std::filesystem::path executable(executable_directory());
+std::filesystem::path locate_source_asset(const std::filesystem::path& executable) {
     const std::vector<std::filesystem::path> candidates = {
+        // A downloaded bundle is a flat folder, so the asset sits beside the binary.
+        executable / "inject.js",
         executable / ".." / "assets" / "inject.js",
         executable / ".." / "share" / "swapdex" / "inject.js",
         platform::state_directory() / "swapdex" / "inject.js",
@@ -32,6 +28,13 @@ std::filesystem::path locate_source_asset() {
     }
     return {};
 }
+
+namespace {
+
+constexpr std::size_t registration_maximum_bytes = 256U * 1024U;
+constexpr std::size_t manifest_maximum_bytes = 64U * 1024U;
+constexpr std::size_t launcher_maximum_bytes = 64U * 1024U;
+
 
 bool regular_file_without_symlink(const std::filesystem::path& path) {
     std::error_code error;
@@ -64,7 +67,7 @@ ServiceControlPaths default_service_control_paths() {
     if (!regular_file_without_symlink(paths.source_executable)) {
         paths.source_executable = platform::executable_directory() / platform::chatgpt_executable_name();
     }
-    paths.source_asset = locate_source_asset();
+    paths.source_asset = locate_source_asset(platform::executable_directory());
 #if defined(_WIN32)
     paths.installed_executable = config_directory() / "swapdex" / "swapdex.exe";
     paths.installed_asset = platform::state_directory() / "swapdex" / "inject.js";

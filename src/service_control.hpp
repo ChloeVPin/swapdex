@@ -35,6 +35,9 @@ struct ServiceControlPaths {
 
 ServiceControlPaths default_service_control_paths();
 std::optional<RuntimePaths> installed_runtime_paths();
+// Finds the renderer asset a build should install. Takes the directory holding the
+// executable so a downloaded bundle, a source build, and an installed copy all work.
+std::filesystem::path locate_source_asset(const std::filesystem::path& executable_directory);
 
 // Installs the add-on for the current operating system. Each platform registers
 // itself to start at sign in through its own mechanism, while the command surface
