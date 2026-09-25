@@ -20,13 +20,25 @@ jobs:
             os: ubuntu-latest
             archive: swapdex-linux-x64.tar.gz
             folder: swapdex
+          - name: linux-arm64
+            os: ubuntu-24.04-arm
+            archive: swapdex-linux-arm64.tar.gz
+            folder: swapdex
           - name: macos
             os: macos-latest
             archive: swapdex-macos-arm64.tar.gz
             folder: swapdex
+          - name: macos-x64
+            os: macos-13
+            archive: swapdex-macos-x64.tar.gz
+            folder: swapdex
           - name: windows
             os: windows-latest
             archive: swapdex-windows-x64.zip
+            folder: swapdex
+          - name: windows-arm64
+            os: windows-11-arm
+            archive: swapdex-windows-arm64.zip
             folder: swapdex
 
     steps:

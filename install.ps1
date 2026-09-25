@@ -65,7 +65,15 @@ try {
     try {
         Invoke-WebRequest -Uri $url -OutFile $archive -UseBasicParsing
     } catch {
-        Write-Host "swapdex: the download failed. Check the URL and your network: $url" -ForegroundColor Red
+        # A missing asset and a broken network look the same to the client, so name
+        # the build that is missing rather than leaving the reader to guess.
+        $status = $null
+        try { $status = (Invoke-WebRequest -Uri $url -Method Head -UseBasicParsing).StatusCode } catch { $status = $_.Exception.Response.StatusCode.value__ }
+        if ($status -eq 404) {
+            Write-Host "swapdex: there is no published build for windows-$arch yet. Releases are at $Repository/releases" -ForegroundColor Red
+            exit 1
+        }
+        Write-Host "swapdex: the download failed. Check your network and try again: $url" -ForegroundColor Red
         exit 1
     }
 

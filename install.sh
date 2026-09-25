@@ -79,7 +79,12 @@ main() {
 
     say "  downloading: ${asset}"
     if ! curl -fsSL "$url" -o "$workdir/swapdex.tar.gz"; then
-        fail "the download failed. Check the URL and your network: ${url}"
+        # A missing asset and a broken network look the same to curl, so say which
+        # build is missing rather than leaving the reader to guess.
+        if ! curl -fsSL --head "$url" >/dev/null 2>&1; then
+            fail "there is no published build for ${platform}-${arch} yet. Releases are at ${repository}/releases"
+        fi
+        fail "the download failed. Check your network and try again: ${url}"
     fi
 
     mkdir -p "$workdir/bundle"
