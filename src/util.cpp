@@ -12,6 +12,7 @@
 #include <sstream>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <unistd.h>
 
 
 namespace swapdex {
@@ -20,7 +21,12 @@ namespace {
 constexpr std::size_t maximum_auth_bytes = 16U * 1024U * 1024U;
 
 int open_parent_directory(const std::filesystem::path& path) {
+    // O_DIRECTORY only exists on Linux, and O_CLOEXEC with it is meaningless without it.
+#if defined(__linux__)
     return open(path.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+#else
+    return open(path.c_str(), O_RDONLY | O_NOFOLLOW);
+#endif
 }
 
 void close_if_open(int& descriptor) {
