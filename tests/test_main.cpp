@@ -14,6 +14,7 @@ void test_platform_layer();
 void test_shell_bridge();
 void test_account_home_layout();
 void test_account_root_is_explicit();
+void test_skill_install_paths();
 
 int main(int argc, char** argv) {
     const std::string filter = argc > 1 ? argv[1] : "";
@@ -28,6 +29,7 @@ int main(int argc, char** argv) {
         {"shell_bridge", test_shell_bridge},
         {"account_home_layout", test_account_home_layout},
         {"account_root_scope", test_account_root_is_explicit},
+        {"skill_install_paths", test_skill_install_paths},
     };
     std::size_t failures = 0;
     std::size_t matched = 0;

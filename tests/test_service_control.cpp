@@ -291,3 +291,19 @@ void test_service_control_exec() {
     }
     remove_root(root);
 }
+
+void test_skill_install_paths() {
+    // Codex discovers skills under $CODEX_HOME/skills. The wrapper points CODEX_HOME at
+    // the active account, so a skill installed only in the shared home is invisible.
+    namespace fs = std::filesystem;
+    const fs::path first = "/tmp/accounts/account-aaa";
+    const fs::path second = "/tmp/accounts/account-bbb";
+    const fs::path shared = "/tmp/shared-codex";
+    const std::vector<fs::path> directories = swapdex::skill_install_directories({first, second}, shared);
+    swapdex::test::check(directories.size() == 3U, "The skill was not installed for every account plus the shared home");
+    swapdex::test::check(directories[0] == first / "skills" / "swapdex", "The first account home is missing from the skill install list");
+    swapdex::test::check(directories[1] == second / "skills" / "swapdex", "The second account home is missing from the skill install list");
+    swapdex::test::check(directories[2] == shared / "skills" / "swapdex", "The shared home is missing from the skill install list");
+    const std::vector<fs::path> again = swapdex::skill_install_directories({first, first}, shared);
+    swapdex::test::check(again.size() == 2U, "The skill install list contains duplicates");
+}

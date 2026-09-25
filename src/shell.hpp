@@ -1,5 +1,6 @@
 #pragma once
 
+#include <filesystem>
 #include <optional>
 #include <string>
 #include <vector>
@@ -28,6 +29,9 @@ std::string usage_report(const std::string& id);
 
 int shell_command(const std::vector<std::string>& arguments);
 int accounts_command();
+// Codex reads skills from $CODEX_HOME/skills, and the wrapper points CODEX_HOME at an
+// account, so every account home needs the skill.
+std::vector<std::filesystem::path> skill_install_directories(const std::vector<std::filesystem::path>& account_homes, const std::filesystem::path& shared_home);
 int usage_command();
 int whoami_command();
 

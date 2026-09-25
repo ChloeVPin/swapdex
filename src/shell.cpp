@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <iostream>
 #include <memory>
+#include <optional>
 
 #include "platform.hpp"
 #include "profile_store.hpp"
@@ -192,21 +193,66 @@ int accounts_command() {
     return 0;
 }
 
+// Codex discovers skills under $CODEX_HOME/skills, and Swapdex points CODEX_HOME at the
+// active account, so the skill has to exist in every account home. The shared home is
+// covered too, for sessions started without the wrapper.
+std::vector<std::filesystem::path> skill_install_directories(const std::vector<std::filesystem::path>& account_homes, const std::filesystem::path& shared_home) {
+    std::vector<std::filesystem::path> directories;
+    for (const std::filesystem::path& home : account_homes) {
+        const std::filesystem::path directory = home / "skills" / "swapdex";
+        if (std::find(directories.begin(), directories.end(), directory) == directories.end()) {
+            directories.push_back(directory);
+        }
+    }
+    if (!shared_home.empty()) {
+        const std::filesystem::path directory = shared_home / "skills" / "swapdex";
+        if (std::find(directories.begin(), directories.end(), directory) == directories.end()) {
+            directories.push_back(directory);
+        }
+    }
+    return directories;
+}
+
+std::vector<std::filesystem::path> skill_install_directories() {
+    std::vector<std::filesystem::path> homes;
+    std::filesystem::path shared;
+    const std::optional<RuntimePaths> runtime = installed_runtime_paths();
+    if (runtime.has_value()) {
+        ProfileStore store(runtime->state_root, default_account_root(), runtime->codex_home, runtime->electron_user_data);
+        try {
+            store.initialize();
+            for (const ProfileRecord& record : store.list_existing()) {
+                homes.push_back(store.profile_home(record.id));
+            }
+        } catch (const std::exception&) {
+        }
+        shared = runtime->codex_home;
+    } else {
+        shared = platform::home_directory() / ".codex";
+    }
+    return skill_install_directories(homes, shared);
+}
+
 int skill_command(const std::vector<std::string>& arguments) {
     const bool remove = std::find(arguments.begin(), arguments.end(), "--remove") != arguments.end();
-    const std::filesystem::path home = platform::home_directory();
-    const std::filesystem::path directory = home / ".codex" / "skills" / "swapdex";
-    const std::filesystem::path target = directory / "SKILL.md";
+    const std::vector<std::filesystem::path> directories = skill_install_directories();
     if (remove) {
-        std::error_code error;
-        if (std::filesystem::is_regular_file(target, error) && !error) {
-            std::filesystem::remove(target, error);
+        std::size_t removed = 0U;
+        for (const std::filesystem::path& directory : directories) {
+            const std::filesystem::path target = directory / "SKILL.md";
+            std::error_code error;
+            if (std::filesystem::is_regular_file(target, error) && !error) {
+                std::filesystem::remove(target, error);
+                if (!error) {
+                    ++removed;
+                }
+            }
+            std::error_code directory_error;
+            if (std::filesystem::is_empty(directory, directory_error) && !directory_error) {
+                std::filesystem::remove(directory, directory_error);
+            }
         }
-        std::error_code directory_error;
-        if (std::filesystem::is_empty(directory, directory_error) && !directory_error) {
-            std::filesystem::remove(directory, directory_error);
-        }
-        std::cout << "Removed the Swapdex skill from Codex.\n";
+        std::cout << (removed == 0U ? "No Swapdex skill was installed.\n" : "Removed the Swapdex skill for Codex.\n");
         return 0;
     }
     const std::vector<std::filesystem::path> candidates = {
@@ -215,18 +261,28 @@ int skill_command(const std::vector<std::string>& arguments) {
         platform::executable_directory() / ".." / "assets" / "skill" / "SKILL.md",
         std::filesystem::path(SWAPDEX_INJECT_SCRIPT_PATH).parent_path().parent_path() / "assets" / "skill" / "SKILL.md",
     };
+    std::filesystem::path source;
     for (const auto& candidate : candidates) {
         std::error_code error;
         if (std::filesystem::is_regular_file(candidate, error) && !error) {
-            ensure_directory(directory, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write | std::filesystem::perms::owner_exec);
-            copy_file_atomically(candidate, target, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write);
-            std::cout << "Installed the Swapdex skill for Codex.\n";
-            std::cout << "Start a new Codex session, then type /swapdex or $swapdex.\n";
-            return 0;
+            source = candidate;
+            break;
         }
     }
-    std::cerr << "swapdex: the bundled skill file could not be found\n";
-    return 1;
+    if (source.empty()) {
+        std::cerr << "swapdex: the bundled skill file could not be found\n";
+        return 1;
+    }
+    for (const std::filesystem::path& directory : directories) {
+        ensure_private_directory(directory);
+        copy_file_atomically(source, directory / "SKILL.md", std::filesystem::perms::owner_read | std::filesystem::perms::owner_write);
+    }
+    std::cout << "Installed the Swapdex skill in " << directories.size() << (directories.size() == 1U ? " place" : " places") << ":\n";
+    for (const std::filesystem::path& directory : directories) {
+        std::cout << "  " << directory.string() << "\n";
+    }
+    std::cout << "Start a new Codex session, then type /swapdex or $swapdex.\n";
+    return 0;
 }
 
 int shell_command(const std::vector<std::string>& arguments) {

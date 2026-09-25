@@ -62,7 +62,9 @@ it. Bypass it for a single command with `SWAPDEX_FOLLOW=0 codex`, or remove it w
 swapdex skill
 ```
 
-Then type `/swapdex` or `$swapdex` in any Codex session and it tells you which account
+Codex reads skills from `$CODEX_HOME/skills`, and Swapdex points that at the active
+account, so `swapdex skill` writes the skill into every account you have plus the shared
+home. Then start a new session and type `/swapdex` or `$swapdex` and it tells you which account
 you are on, lists the others with their plans and limits, and points you at the
 picker. Remove it later with `swapdex skill --remove`.
 
