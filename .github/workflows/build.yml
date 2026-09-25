@@ -24,12 +24,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Linux build dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ninja-build
-
+      # No packages to install: CMake uses a system nlohmann_json when it finds one and
+      # fetches the single header when it does not, so every platform configures the
+      # same way with only a compiler present.
       - name: Configure
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 
