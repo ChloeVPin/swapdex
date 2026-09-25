@@ -1,0 +1,44 @@
+#include <exception>
+#include <iostream>
+#include <string>
+
+#include "test.hpp"
+
+void test_profile_store();
+void test_json_rpc();
+void test_app_server_refresh();
+void test_service_control();
+void test_maintenance_schedule();
+void test_service_control_exec();
+
+int main(int argc, char** argv) {
+    const std::string filter = argc > 1 ? argv[1] : "";
+    const std::pair<std::string, swapdex::test::TestFunction> tests[] = {
+        {"profile_store", test_profile_store},
+        {"json_rpc", test_json_rpc},
+        {"app_server_refresh", test_app_server_refresh},
+        {"service_control", test_service_control},
+        {"maintenance_schedule", test_maintenance_schedule},
+        {"service_control_exec", test_service_control_exec},
+    };
+    std::size_t failures = 0;
+    std::size_t matched = 0;
+    for (const auto& [name, test] : tests) {
+        if (!filter.empty() && name != filter) {
+            continue;
+        }
+        ++matched;
+        try {
+            test();
+            std::cout << "PASS " << name << "\n";
+        } catch (const std::exception& error) {
+            ++failures;
+            std::cerr << "FAIL " << name << ": " << error.what() << "\n";
+        }
+    }
+    if (!filter.empty() && matched == 0U) {
+        std::cerr << "FAIL unknown test filter\n";
+        return 1;
+    }
+    return failures == 0 ? 0 : 1;
+}

@@ -1,0 +1,19 @@
+# Build output
+build/
+build-*/
+cmake-build-*/
+install/
+*.o
+*.a
+
+# Local state and credentials. Never commit these.
+.swapdex/
+*.log
+
+# Editor and OS files
+.vscode/
+.idea/
+.cache/
+compile_commands.json
+.DS_Store
+Thumbs.db
