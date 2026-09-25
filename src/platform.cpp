@@ -1,5 +1,9 @@
 #include "platform.hpp"
 
+#ifndef SWAPDEX_CODEX_BINARY
+#define SWAPDEX_CODEX_BINARY "codex"
+#endif
+
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -108,6 +112,23 @@ std::optional<std::string> first_existing(const std::vector<std::filesystem::pat
 }
 
 #endif
+
+std::vector<std::filesystem::path> value_separator_split(const std::string& value, const std::filesystem::path& separator) {
+    std::vector<std::filesystem::path> parts;
+    std::size_t start = 0;
+    while (start <= value.size()) {
+        const std::size_t end = value.find(separator.string(), start);
+        const std::string piece = value.substr(start, end == std::string::npos ? std::string::npos : end - start);
+        if (!piece.empty()) {
+            parts.push_back(from_native(piece));
+        }
+        if (end == std::string::npos) {
+            break;
+        }
+        start = end + separator.string().size();
+    }
+    return parts;
+}
 
 std::vector<std::string> allowed_child_variables() {
     return {
@@ -468,6 +489,10 @@ std::vector<std::pair<std::string, std::string>> child_environment(const Environ
 }
 
 int run_command(const std::vector<std::string>& arguments) {
+    return run_command(arguments, {});
+}
+
+int run_command(const std::vector<std::string>& arguments, const EnvironmentOverrides& overrides) {
     if (arguments.empty()) {
         return 1;
     }
@@ -479,7 +504,7 @@ int run_command(const std::vector<std::string>& arguments) {
         }
         command_line.append(widen(arguments[index]));
     }
-    std::vector<std::pair<std::string, std::string>> environment_pairs = child_environment({});
+    std::vector<std::pair<std::string, std::string>> environment_pairs = child_environment(overrides);
     std::wstring environment_block;
     for (const auto& [name, value] : environment_pairs) {
         environment_block.append(widen(name));
@@ -504,7 +529,7 @@ int run_command(const std::vector<std::string>& arguments) {
     return static_cast<int>(code);
 #else
     std::vector<std::string> storage;
-    for (const auto& entry : child_environment({})) {
+    for (const auto& entry : child_environment(overrides)) {
         storage.push_back(entry.first + "=" + entry.second);
         storage.emplace_back();
     }
@@ -547,6 +572,34 @@ int run_command(const std::vector<std::string>& arguments) {
     }
     return 1;
 #endif
+}
+
+std::filesystem::path codex_cli_binary() {
+    const std::optional<std::string> path_value = environment("PATH");
+    if (path_value.has_value()) {
+        const std::filesystem::path directory_separator =
+#if defined(_WIN32)
+            std::filesystem::path(";");
+#else
+            std::filesystem::path(":");
+#endif
+        const std::vector<std::filesystem::path> search = value_separator_split(*path_value, directory_separator);
+#if defined(_WIN32)
+        const std::filesystem::path leaf = "codex.exe";
+#elif defined(__APPLE__)
+        const std::filesystem::path leaf = "codex";
+#else
+        const std::filesystem::path leaf = "codex";
+#endif
+        for (const auto& directory : search) {
+            const std::filesystem::path candidate = directory / leaf;
+            std::error_code error;
+            if (std::filesystem::is_regular_file(candidate, error) && !error) {
+                return candidate;
+            }
+        }
+    }
+    return from_native(SWAPDEX_CODEX_BINARY);
 }
 
 bool spawn_detached(const std::vector<std::string>& arguments) {

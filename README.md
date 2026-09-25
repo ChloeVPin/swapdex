@@ -27,6 +27,20 @@ the profile menu you never use, while Add account and Settings always stay visib
 account is deleted with its stored credentials and Codex keeps running. Removing the
 account you are signed in with signs you out and clears its credentials.
 
+**The same accounts in your terminal.** Swapdex stores credentials per account, so the
+Codex command line tool can use any of them too:
+
+```sh
+swapdex shell --list                  # accounts you can run
+swapdex shell work                    # start Codex as the work account
+swapdex usage                         # limits and credits for the signed in account
+swapdex whoami                        # who the terminal is set to
+```
+
+`swapdex shell` hands the rest of the command straight to Codex, so the usual flags
+still work. Each account keeps its own session history, because the CLI stores that
+under the account it was started with.
+
 ## Install
 
 Swapdex supports macOS, Linux, and Windows. Pick the line for your system.
@@ -63,6 +77,10 @@ To reinstall a newer version later, run the same line again.
 | `swapdex status` | Check whether Swapdex is installed and running. |
 | `swapdex uninstall` | Remove Swapdex and keep your accounts. |
 | `swapdex uninstall --purge-data` | Remove Swapdex and delete stored account data. |
+| `swapdex shell [account]` | Start the Codex command line tool as that account. |
+| `swapdex shell --list` | List accounts the terminal can use. |
+| `swapdex usage` | Show limits and credits for the signed in account. |
+| `swapdex whoami` | Show which account the terminal would use. |
 
 None of these touch Codex itself.
 
@@ -144,6 +162,7 @@ cmake --build build --target swapdex_live_probe
 
 ```
 src/            the service, account store, platform layer, and CLI
+
 assets/         the interface that is injected into Codex
 tests/          unit tests and the live interface probe
 install.sh      one line installer for macOS and Linux

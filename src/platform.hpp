@@ -34,6 +34,9 @@ std::vector<std::filesystem::path> chatgpt_binary_candidates();
 std::filesystem::path find_chatgpt_binary();
 bool matches_chatgpt_binary(const std::filesystem::path& path);
 std::filesystem::path chatgpt_executable_name();
+// The Codex command line binary, preferring whatever the user already has on PATH so
+// terminal sessions match the version they normally use.
+std::filesystem::path codex_cli_binary();
 
 // Process discovery, used to refuse starting while a second Codex is already running.
 std::optional<std::int64_t> running_unmanaged_chatgpt(std::int64_t managed_process_group);
@@ -64,6 +67,7 @@ private:
 using EnvironmentOverrides = std::vector<std::pair<std::string, std::string>>;
 std::vector<std::pair<std::string, std::string>> child_environment(const EnvironmentOverrides& overrides);
 int run_command(const std::vector<std::string>& arguments);
+int run_command(const std::vector<std::string>& arguments, const EnvironmentOverrides& overrides);
 bool spawn_detached(const std::vector<std::string>& arguments);
 
 // Registry access, only meaningful on Windows. Exposed so the service backend and the

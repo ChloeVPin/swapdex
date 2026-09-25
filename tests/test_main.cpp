@@ -11,6 +11,7 @@ void test_service_control();
 void test_maintenance_schedule();
 void test_service_control_exec();
 void test_platform_layer();
+void test_shell_bridge();
 
 int main(int argc, char** argv) {
     const std::string filter = argc > 1 ? argv[1] : "";
@@ -22,6 +23,7 @@ int main(int argc, char** argv) {
         {"maintenance_schedule", test_maintenance_schedule},
         {"service_control_exec", test_service_control_exec},
         {"platform_layer", test_platform_layer},
+        {"shell_bridge", test_shell_bridge},
     };
     std::size_t failures = 0;
     std::size_t matched = 0;

@@ -18,6 +18,7 @@ add_library(swapdex_core
     src/service.cpp
     src/service_backend.cpp
     src/service_control.cpp
+    src/shell.cpp
     src/util.cpp
 )
 
@@ -76,10 +77,11 @@ if(BUILD_TESTING)
     add_test(NAME maintenance_schedule COMMAND swapdex_tests maintenance_schedule)
     add_test(NAME service_control_exec COMMAND swapdex_tests service_control_exec)
     add_test(NAME platform_layer COMMAND swapdex_tests platform_layer)
+    add_test(NAME shell_bridge COMMAND swapdex_tests shell_bridge)
     add_test(NAME cli_help COMMAND swapdex --help)
     add_test(NAME cli_version COMMAND swapdex version)
     add_test(NAME cli_invalid COMMAND swapdex invalid-command)
-    set_tests_properties(profile_store json_rpc app_server_refresh service_control maintenance_schedule service_control_exec platform_layer cli_help cli_version cli_invalid PROPERTIES TIMEOUT 30)
+    set_tests_properties(profile_store json_rpc app_server_refresh service_control maintenance_schedule service_control_exec platform_layer shell_bridge cli_help cli_version cli_invalid PROPERTIES TIMEOUT 30)
     set_tests_properties(cli_help PROPERTIES PASS_REGULAR_EXPRESSION "swapdex install")
     set_tests_properties(cli_version PROPERTIES PASS_REGULAR_EXPRESSION "0\\.2\\.0")
     set_tests_properties(cli_invalid PROPERTIES WILL_FAIL TRUE)

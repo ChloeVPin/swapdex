@@ -12,6 +12,7 @@
 #include "service.hpp"
 #include "service_backend.hpp"
 #include "service_control.hpp"
+#include "shell.hpp"
 #include "util.hpp"
 
 namespace {
@@ -192,6 +193,56 @@ void test_platform_layer() {
         }
     }
     swapdex::test::check(found, "The child environment dropped an override");
+}
+
+void test_shell_bridge() {
+    swapdex::ProfileRecord primary;
+    primary.id = "account-alpha";
+    primary.label = "Work";
+    primary.email = "Alpha@Example.test";
+    primary.plan = "plus";
+    primary.authenticated = true;
+    swapdex::UsageWindow five;
+    five.remaining_percent = 75;
+    five.resets_at = 1893456000;
+    primary.primary_usage = five;
+    swapdex::UsageWindow weekly;
+    weekly.remaining_percent = 40;
+    primary.secondary_usage = weekly;
+    primary.credits_balance = "12.50";
+    primary.available_reset_credits = 2;
+
+    swapdex::ProfileRecord secondary;
+    secondary.id = "account-beta";
+    secondary.label = "Personal";
+    secondary.email = "beta@example.test";
+    secondary.plan = "pro";
+    secondary.authenticated = true;
+
+    const std::vector<swapdex::ProfileRecord> profiles = {primary, secondary};
+    const std::optional<swapdex::ProfileRecord> active = primary;
+
+    swapdex::test::check_equal(swapdex::resolve_account_in(profiles, active, "").id, primary.id, "An empty term did not select the signed in account");
+    swapdex::test::check_equal(swapdex::resolve_account_in(profiles, active, "ALPHA@EXAMPLE.TEST").id, primary.id, "An email did not resolve case insensitively");
+    swapdex::test::check_equal(swapdex::resolve_account_in(profiles, active, "beta").id, secondary.id, "A partial email did not resolve");
+    swapdex::test::check_equal(swapdex::resolve_account_in(profiles, active, "account-beta").id, secondary.id, "An account id did not resolve");
+    swapdex::test::check(swapdex::resolve_account_in(profiles, active, "nothing-here").id.empty(), "An unknown term resolved to an account");
+    const swapdex::AccountMatch ambiguous = swapdex::resolve_account_in(profiles, active, "example.test");
+    swapdex::test::check(ambiguous.ambiguous, "A term matching two accounts was not reported as ambiguous");
+    swapdex::test::check_equal(ambiguous.candidates.size(), std::size_t(2), "The ambiguous result did not list both accounts");
+
+    const std::string report = swapdex::usage_report_for(primary, active);
+    swapdex::test::check(report.find("Alpha@Example.test") != std::string::npos, "The usage report lost the account name");
+    swapdex::test::check(report.find("plan   Plus") != std::string::npos, "The usage report did not capitalise the plan");
+    swapdex::test::check(report.find("signed in to the Codex app") != std::string::npos, "The usage report did not mark the active account");
+    swapdex::test::check(report.find("75% left") != std::string::npos, "The usage report lost the five hour window");
+    swapdex::test::check(report.find("40% left") != std::string::npos, "The usage report lost the weekly window");
+    swapdex::test::check(report.find("12.50") != std::string::npos, "The usage report lost the credit balance");
+    swapdex::test::check(report.find("2 available") != std::string::npos, "The usage report lost the reset credits");
+
+    const std::string other = swapdex::usage_report_for(secondary, active);
+    swapdex::test::check(other.find("stored, not signed in") != std::string::npos, "A stored account was reported as signed in");
+    swapdex::test::check(other.find("Pro") != std::string::npos, "A stored account lost its plan");
 }
 
 void test_service_control_exec() {

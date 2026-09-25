@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "service.hpp"
+#include "shell.hpp"
 #include "service_control.hpp"
 #include "util.hpp"
 
@@ -19,6 +20,9 @@ void print_usage() {
               << "  swapdex launch\n"
               << "  swapdex list\n"
               << "  swapdex add [account name]\n"
+              << "  swapdex shell [--list | account] [codex arguments]\n"
+              << "  swapdex usage\n"
+              << "  swapdex whoami\n"
               << "  swapdex version\n"
               << "  swapdex help\n";
 }
@@ -80,6 +84,15 @@ int main(int argc, char** argv) {
             }
             swapdex::Service service(options);
             return service.add(std::move(label));
+        }
+        if (command == "shell" && arguments.size() >= 1) {
+            return swapdex::shell_command(std::vector<std::string>(arguments.begin() + 1, arguments.end()));
+        }
+        if (command == "usage" && arguments.size() == 1) {
+            return swapdex::usage_command();
+        }
+        if (command == "whoami" && arguments.size() == 1) {
+            return swapdex::whoami_command();
         }
         if (command == "version" && arguments.size() == 1) {
             std::cout << SWAPDEX_VERSION << "\n";
