@@ -54,6 +54,47 @@
 namespace swapdex::platform {
 namespace {
 
+// execvpe is a GNU extension and macOS does not have it. Resolve the program against
+// PATH ourselves and use execve, which every platform here has.
+void exec_program(const char* program, char* const arguments[], char* const environment[]) {
+#if defined(__linux__) || defined(__CYGWIN__)
+    ::execvpe(program, arguments, environment);
+    ::_exit(127);
+#else
+    const std::filesystem::path requested(program);
+    if (requested.has_parent_path() && requested.is_absolute()) {
+        ::execve(program, arguments, environment);
+        ::_exit(127);
+    }
+    const char* path_variable = std::getenv("PATH");
+    if (path_variable != nullptr) {
+        const std::string entries(path_variable);
+        std::size_t start = 0;
+        while (start <= entries.size()) {
+            const std::size_t end = entries.find(':', start);
+            const std::string directory = entries.substr(start, end == std::string::npos ? std::string::npos : end - start);
+            if (!directory.empty()) {
+                std::error_code error;
+                const std::filesystem::path candidate = std::filesystem::path(directory) / (requested.has_parent_path() ? requested : requested.filename());
+                if (std::filesystem::is_regular_file(candidate, error) && !error) {
+                    ::execve(candidate.c_str(), arguments, environment);
+                    ::_exit(127);
+                }
+            }
+            if (end == std::string::npos) {
+                break;
+            }
+            start = end + 1;
+        }
+    }
+    ::_exit(127);
+#endif
+}
+
+}
+
+namespace {
+
 std::optional<std::string> environment(const char* name) {
     const char* value = std::getenv(name);
     if (value == nullptr || *value == '\0') {
@@ -593,8 +634,7 @@ int run_command(const std::vector<std::string>& arguments, const EnvironmentOver
         return 1;
     }
     if (child == 0) {
-        ::execvpe(argument_pointers.front(), argument_pointers.data(), raw.data());
-        ::_exit(127);
+        exec_program(argument_pointers.front(), argument_pointers.data(), raw.data());
     }
     int status = 0;
     if (::waitpid(child, &status, 0) < 0) {
@@ -665,8 +705,7 @@ bool spawn_detached(const std::vector<std::string>& arguments) {
                 ::close(null_descriptor);
             }
         }
-        ::execvpe(pointers.front(), pointers.data(), raw.data());
-        ::_exit(127);
+        exec_program(pointers.front(), pointers.data(), raw.data());
     }
     return true;
 #endif
