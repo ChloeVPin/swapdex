@@ -33,7 +33,6 @@ namespace {
 
 constexpr std::size_t registration_maximum_bytes = 256U * 1024U;
 constexpr std::size_t manifest_maximum_bytes = 64U * 1024U;
-constexpr std::size_t launcher_maximum_bytes = 64U * 1024U;
 
 
 bool regular_file_without_symlink(const std::filesystem::path& path) {
