@@ -869,6 +869,19 @@ void Service::start_signal_thread() {
     }
     signal_thread_ = std::thread([this, signals] {
         while (!stopping_.load()) {
+#if defined(__APPLE__)
+            // macOS has no sigtimedwait. pselect with no file descriptors waits for the
+            // timeout, then sigwait collects the signal that is already pending.
+            timespec interval {};
+            interval.tv_sec = 0;
+            interval.tv_nsec = 250000000L;
+            sigset_t previous;
+            pselect(0, nullptr, nullptr, nullptr, &interval, nullptr);
+            int signal_number = 0;
+            if (sigwait(&signals, &signal_number) == 0 && (signal_number == SIGINT || signal_number == SIGTERM)) {
+                request_stop();
+            }
+#else
             timespec interval {};
             interval.tv_sec = 0;
             interval.tv_nsec = 250000000L;
@@ -876,6 +889,7 @@ void Service::start_signal_thread() {
             if (signal_number == SIGINT || signal_number == SIGTERM) {
                 request_stop();
             }
+#endif
         }
     });
 }
