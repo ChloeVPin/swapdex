@@ -77,7 +77,18 @@ public:
     }
 
     int start() override {
+        // Clear any earlier failed state first, otherwise the start rate limit can
+        // reject an otherwise fine start. This is best effort: a unit that was never
+        // failed has nothing to clear, and that must not stop the start itself.
+        try {
+            static_cast<void>(run({"--user", "reset-failed", std::string(linux_service_name)}));
+        } catch (const std::exception&) {
+        }
         return run({"--user", "start", std::string(linux_service_name)});
+    }
+
+    bool active() const override {
+        return invoke({"--user", "is-active", std::string(linux_service_name)}) == 0;
     }
 
     int stop() override {
@@ -177,6 +188,11 @@ public:
         return run({"kickstart", "gui/" + label});
     }
 
+    bool active() const override {
+        const std::string label(macos_service_label);
+        return invoke({"print", "gui/" + label}) == 0;
+    }
+
     int stop() override {
         const std::string label(macos_service_label);
         return run({"kill", "SIGTERM", "gui/" + label});
@@ -261,6 +277,12 @@ public:
 
     int start() override {
         return start_service();
+    }
+
+    // The launcher detaches, so there is nothing reliable to poll. Report the request
+    // as accepted and let the service log speak for itself.
+    bool active() const override {
+        return true;
     }
 
     int stop() override {

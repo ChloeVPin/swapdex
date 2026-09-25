@@ -13,7 +13,7 @@ namespace {
 void print_usage() {
     std::cout << "Usage:\n"
               << "  swapdex install [--no-start]\n"
-              << "  swapdex start\n"
+              << "  swapdex start [--close-app]\n"
               << "  swapdex stop\n"
               << "  swapdex status\n"
               << "  swapdex uninstall [--purge-data]\n"
@@ -47,9 +47,9 @@ int main(int argc, char** argv) {
             swapdex::ServiceControl control;
             return control.install(arguments.size() == 1);
         }
-        if (command == "start" && arguments.size() == 1) {
+        if (command == "start" && (arguments.size() == 1 || (arguments.size() == 2 && arguments[1] == "--close-app"))) {
             swapdex::ServiceControl control;
-            return control.start();
+            return control.start(arguments.size() == 2);
         }
         if (command == "stop" && arguments.size() == 1) {
             swapdex::ServiceControl control;

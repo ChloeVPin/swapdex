@@ -1,6 +1,8 @@
 #pragma once
 
+#include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -37,12 +39,20 @@ std::optional<RuntimePaths> installed_runtime_paths();
 // Installs the add-on for the current operating system. Each platform registers
 // itself to start at sign in through its own mechanism, while the command surface
 // stays identical everywhere.
+// Finding and closing a normally launched app, injected so a test can describe the
+// machine it wants rather than depending on what happens to be running.
+struct AppProcessProbe {
+    std::function<std::optional<std::int64_t>()> running_unmanaged;
+    std::function<bool()> close_unmanaged;
+};
+
 class ServiceControl {
 public:
-    explicit ServiceControl(ServiceControlPaths paths = default_service_control_paths(), ServiceBackend::CommandRunner runner = {});
+    explicit ServiceControl(ServiceControlPaths paths = default_service_control_paths(), ServiceBackend::CommandRunner runner = {}, AppProcessProbe app_probe = {});
 
     int install(bool start = true);
-    int start();
+    // close_app lets the command close a normally launched app that would block startup.
+    int start(bool close_app = false);
     int stop();
     int status();
     int uninstall(bool purge_data = false);
@@ -56,6 +66,7 @@ private:
 
     ServiceControlPaths paths_;
     ServiceBackend::CommandRunner runner_;
+    AppProcessProbe app_probe_;
 };
 
 }

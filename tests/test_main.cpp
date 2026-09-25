@@ -13,6 +13,7 @@ void test_service_control_exec();
 void test_platform_layer();
 void test_shell_bridge();
 void test_account_root_is_explicit();
+void test_start_reports_the_truth();
 
 int main(int argc, char** argv) {
     const std::string filter = argc > 1 ? argv[1] : "";
@@ -26,6 +27,7 @@ int main(int argc, char** argv) {
         {"platform_layer", test_platform_layer},
         {"shell_bridge", test_shell_bridge},
         {"account_root_scope", test_account_root_is_explicit},
+        {"start_reports_the_truth", test_start_reports_the_truth},
     };
     std::size_t failures = 0;
     std::size_t matched = 0;

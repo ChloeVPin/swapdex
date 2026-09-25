@@ -281,3 +281,108 @@ void test_service_control_exec() {
     remove_root(root);
 }
 
+void test_start_reports_the_truth() {
+    // A start that does not stay running must not claim success, and a normally
+    // launched app must be named as the reason rather than left to the service log.
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / ("swapdex-start-" + swapdex::random_identifier(6));
+    swapdex::ServiceControlPaths paths = test_paths(root);
+    // install first so the backend reports itself as installed
+    swapdex::ServiceControl installer(paths, [](const std::vector<std::string>&) { return 0; });
+    installer.install(false);
+
+    // The runner prepends the program name, so the verb sits after the flags.
+    auto verb_is = [](const std::vector<std::string>& command, const std::string& verb) {
+        return std::find(command.begin() + 1, command.end(), verb) != command.end();
+    };
+
+    {
+        // is-active never succeeds, so the service never comes up.
+        auto runner = [](const std::vector<std::string>&) { return 1; };
+        swapdex::AppProcessProbe probe;
+        probe.running_unmanaged = [] { return std::optional<std::int64_t>(); };
+        probe.close_unmanaged = [] { return true; };
+        swapdex::ServiceControl control(paths, runner, probe);
+        swapdex::test::check(control.start() != 0, "A start that never came up reported success");
+    }
+
+    {
+        // is-active succeeds once start has been asked for, so this one is honest.
+        bool started = false;
+        auto runner = [&started](const std::vector<std::string>& command) {
+            if (std::find(command.begin() + 1, command.end(), "start") != command.end()) {
+                started = true;
+            }
+            return started ? 0 : 1;
+        };
+        swapdex::AppProcessProbe probe;
+        probe.running_unmanaged = [] { return std::optional<std::int64_t>(); };
+        probe.close_unmanaged = [] { return true; };
+        swapdex::ServiceControl control(paths, runner, probe);
+        swapdex::test::check(control.start() == 0, "A start that came up reported failure");
+        swapdex::test::check(started, "The service was never asked to start");
+    }
+
+    {
+        // A normally launched app blocks the start, and nothing is started behind its back.
+        std::vector<std::vector<std::string>> calls;
+        bool closed = false;
+        auto runner = [&calls](const std::vector<std::string>& command) {
+            calls.push_back(command);
+            return 1;
+        };
+        swapdex::AppProcessProbe probe;
+        probe.running_unmanaged = [] { return std::int64_t(4242); };
+        probe.close_unmanaged = [&closed] { closed = true; return true; };
+        swapdex::ServiceControl control(paths, runner, probe);
+        swapdex::test::check(control.start() != 0, "A blocked start reported success");
+        swapdex::test::check(!closed, "The app was closed without being asked to");
+        bool start_issued = false;
+        for (const auto& call : calls) {
+            if (verb_is(call, "start")) {
+                start_issued = true;
+            }
+        }
+        swapdex::test::check(!start_issued, "Start was attempted while a normally launched app was open");
+    }
+
+    {
+        // Given permission to close it, the app is closed and the start goes ahead.
+        std::vector<std::vector<std::string>> calls;
+        bool started = false;
+        bool closed = false;
+        auto runner = [&calls, &started](const std::vector<std::string>& command) {
+            calls.push_back(command);
+            if (std::find(command.begin() + 1, command.end(), "start") != command.end()) {
+                started = true;
+            }
+            return started ? 0 : 1;
+        };
+        swapdex::AppProcessProbe probe;
+        probe.running_unmanaged = [&closed] { return closed ? std::optional<std::int64_t>() : std::optional<std::int64_t>(4242); };
+        probe.close_unmanaged = [&closed] { closed = true; return true; };
+        swapdex::ServiceControl control(paths, runner, probe);
+        swapdex::test::check(control.start(true) == 0, "The start failed after closing the app");
+        swapdex::test::check(closed, "The app was not closed when permission was given");
+        swapdex::test::check(started, "The service was not started after closing the app");
+    }
+
+    {
+        // An app that refuses to close is reported, not ignored.
+        bool started = false;
+        auto runner = [&started](const std::vector<std::string>& command) {
+            if (std::find(command.begin() + 1, command.end(), "start") != command.end()) {
+                started = true;
+            }
+            return started ? 0 : 1;
+        };
+        swapdex::AppProcessProbe probe;
+        probe.running_unmanaged = [] { return std::int64_t(4242); };
+        probe.close_unmanaged = [] { return false; };
+        swapdex::ServiceControl control(paths, runner, probe);
+        swapdex::test::check(control.start(true) != 0, "A start that could not close the app reported success");
+        swapdex::test::check(!started, "The service was started even though the app could not be closed");
+    }
+
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+}

@@ -41,6 +41,8 @@ std::filesystem::path chatgpt_executable_name();
 
 // Process discovery, used to refuse starting while a second Codex is already running.
 std::optional<std::int64_t> running_unmanaged_chatgpt(std::int64_t managed_process_group);
+// Asks a normally launched app to close, then waits briefly for it to go away.
+bool close_unmanaged_chatgpt();
 
 // Durable file system helpers.
 std::string read_link(const std::filesystem::path& path);

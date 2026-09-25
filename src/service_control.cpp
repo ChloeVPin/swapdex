@@ -1,6 +1,8 @@
 #include "service_control.hpp"
 
 #include <algorithm>
+#include <chrono>
+#include <thread>
 #include <filesystem>
 #include <iostream>
 
@@ -102,8 +104,17 @@ std::optional<RuntimePaths> installed_runtime_paths() {
     return paths;
 }
 
-ServiceControl::ServiceControl(ServiceControlPaths paths, ServiceBackend::CommandRunner runner)
-    : paths_(std::move(paths)), runner_(std::move(runner)) {}
+ServiceControl::ServiceControl(ServiceControlPaths paths, ServiceBackend::CommandRunner runner, AppProcessProbe app_probe)
+    : paths_(std::move(paths)),
+      runner_(std::move(runner)),
+      app_probe_(std::move(app_probe)) {
+    if (!app_probe_.running_unmanaged) {
+        app_probe_.running_unmanaged = [] { return platform::running_unmanaged_chatgpt(-1); };
+    }
+    if (!app_probe_.close_unmanaged) {
+        app_probe_.close_unmanaged = [] { return platform::close_unmanaged_chatgpt(); };
+    }
+}
 
 ServiceRuntime ServiceControl::runtime() const {
     ServiceRuntime runtime;
@@ -234,12 +245,44 @@ int ServiceControl::install(bool start) {
     return 0;
 }
 
-int ServiceControl::start() {
+int ServiceControl::start(bool close_app) {
     const std::unique_ptr<ServiceBackend> backend = make_service_backend(runtime(), runner_);
     if (!backend->installed()) {
         throw Error("service_not_installed", "Swapdex is not installed. Run the install command first.");
     }
-    backend->start();
+    if (backend->active()) {
+        std::cout << "Swapdex is already running.\n";
+        return 0;
+    }
+    // Swapdex launches the app itself so it can attach to it. A normally launched app
+    // holds the same profile, so it has to be closed first, and saying so is more use
+    // than a service that quietly fails to start.
+    if (app_probe_.running_unmanaged().has_value()) {
+        if (!close_app) {
+            std::cerr << "The Codex app is already open. Swapdex needs to close it and start its own.\n";
+            std::cerr << "Close the app and run this again, or run swapdex start --close-app.\n";
+            return 1;
+        }
+        std::cout << "Closing the Codex app.\n";
+        if (!app_probe_.close_unmanaged()) {
+            std::cerr << "swapdex: the Codex app did not close. Quit it yourself and run this again.\n";
+            return 1;
+        }
+    }
+    try {
+        backend->start();
+    } catch (const std::exception&) {
+        // A refused start is not the end of the story, and the reason is more useful
+        // than the raw backend complaint, so fall through and report the real outcome.
+    }
+    for (int attempt = 0; attempt < 100 && !backend->active(); ++attempt) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    if (!backend->active()) {
+        std::cerr << "swapdex: the service did not stay running.\n";
+        std::cerr << "Run swapdex status for details.\n";
+        return 1;
+    }
     std::cout << "Swapdex started.\n";
     return 0;
 }

@@ -37,6 +37,7 @@
 #include <sys/sysctl.h>
 #else
 #include <cerrno>
+#include <csignal>
 #include <fcntl.h>
 #include <pwd.h>
 #include <sys/file.h>
@@ -666,6 +667,63 @@ bool spawn_detached(const std::vector<std::string>& arguments) {
     }
     return true;
 #endif
+}
+
+namespace {
+
+// Sends a polite termination request to a process and reports whether it is gone.
+bool request_exit(std::int64_t pid, bool force) {
+#if defined(_WIN32)
+    HANDLE handle = OpenProcess(PROCESS_TERMINATE, FALSE, static_cast<DWORD>(pid));
+    if (handle == nullptr) {
+        return false;
+    }
+    const BOOL ok = TerminateProcess(handle, force ? 1 : 0);
+    CloseHandle(handle);
+    return ok != FALSE;
+#else
+    return ::kill(static_cast<pid_t>(pid), force ? SIGKILL : SIGTERM) == 0;
+#endif
+}
+
+bool process_alive(std::int64_t pid) {
+#if defined(_WIN32)
+    HANDLE handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, static_cast<DWORD>(pid));
+    if (handle == nullptr) {
+        return false;
+    }
+    DWORD code = 0;
+    const bool alive = GetExitCodeProcess(handle, &code) != FALSE && code == STILL_ACTIVE;
+    CloseHandle(handle);
+    return alive;
+#else
+    return ::kill(static_cast<pid_t>(pid), 0) == 0;
+#endif
+}
+
+}
+
+bool close_unmanaged_chatgpt() {
+    const std::optional<std::int64_t> pid = running_unmanaged_chatgpt(-1);
+    if (!pid.has_value()) {
+        return true;
+    }
+    // The app has several helper processes, so ask the whole tree to leave first.
+    request_exit(*pid, false);
+    for (int attempt = 0; attempt < 40; ++attempt) {
+        if (!process_alive(*pid)) {
+            return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    request_exit(*pid, true);
+    for (int attempt = 0; attempt < 20; ++attempt) {
+        if (!process_alive(*pid)) {
+            return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    return false;
 }
 
 std::optional<std::int64_t> running_unmanaged_chatgpt(std::int64_t managed_process_group) {

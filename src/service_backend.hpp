@@ -39,6 +39,8 @@ public:
     virtual bool installed() const = 0;
     virtual int enable(bool start) = 0;
     virtual int start() = 0;
+    // Whether the service is running right now, so a start can be verified rather than assumed.
+    virtual bool active() const = 0;
     virtual int stop() = 0;
     virtual int status() = 0;
     virtual int disable() = 0;
