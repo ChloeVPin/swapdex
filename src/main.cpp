@@ -22,11 +22,13 @@ void print_usage() {
               << "  swapdex list\n"
               << "  swapdex add [account name]\n"
               << "  swapdex shell [--list | account] [codex arguments]\n"
+              << "  swapdex accounts\n"
               << "  swapdex usage\n"
               << "  swapdex whoami\n"
               << "  swapdex statusline [--apply]\n"
               << "  swapdex shell-init [--remove]\n"
               << "  swapdex tui [--no-relaunch]\n"
+              << "  swapdex skill [--remove]\n"
               << "  swapdex version\n"
               << "  swapdex help\n";
 }
@@ -91,6 +93,12 @@ int main(int argc, char** argv) {
         }
         if (command == "shell" && arguments.size() >= 1) {
             return swapdex::shell_command(std::vector<std::string>(arguments.begin() + 1, arguments.end()));
+        }
+        if (command == "accounts" && arguments.size() == 1) {
+            return swapdex::accounts_command();
+        }
+        if (command == "skill" && (arguments.size() == 1 || (arguments.size() == 2 && arguments[1] == "--remove"))) {
+            return swapdex::skill_command(std::vector<std::string>(arguments.begin() + 1, arguments.end()));
         }
         if (command == "usage" && arguments.size() == 1) {
             return swapdex::usage_command();

@@ -51,6 +51,22 @@ It adds a small wrapper to your shell startup file and never touches anything el
 it. Bypass it for a single command with `SWAPDEX_FOLLOW=0 codex`, or remove it with
 `swapdex shell-init --remove`.
 
+**`/swapdex` inside Codex.** Install the skill once:
+
+```sh
+swapdex skill
+```
+
+Then type `/swapdex` or `$swapdex` in any Codex session and it tells you which account
+you are on, lists the others with their plans and limits, and points you at the
+picker. Remove it later with `swapdex skill --remove`.
+
+Switching itself has to happen in a terminal, and that is a Codex limit rather than a
+choice. Nothing a third party installs can take the terminal over from inside a live
+Codex session: the status line is fixed built in items, skills are instructions the
+model reads rather than programs it runs, and hooks fire on model lifecycle events.
+So `/swapdex` can show you your accounts, and the menu below does the switching.
+
 **A menu in the terminal.** For a visual picker instead of commands:
 
 ```sh
@@ -113,6 +129,8 @@ To reinstall a newer version later, run the same line again.
 | `swapdex shell-init` | Make plain `codex` follow the app account. |
 | `swapdex statusline` | Explain and optionally enable the rate limit items. |
 | `swapdex tui` | Open the interactive account picker. |
+| `swapdex accounts` | List accounts and limits, read only. |
+| `swapdex skill` | Install or remove the Codex `/swapdex` skill. |
 
 None of these touch Codex itself.
 

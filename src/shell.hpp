@@ -27,6 +27,7 @@ std::string usage_report_for(const ProfileRecord& record, const std::optional<Pr
 std::string usage_report(const std::string& id);
 
 int shell_command(const std::vector<std::string>& arguments);
+int accounts_command();
 int usage_command();
 int whoami_command();
 
@@ -35,6 +36,7 @@ int whoami_command();
 // account the terminal runs as. These commands print, and optionally apply, the
 // segment list that surfaces those limits.
 int statusline_command(const std::vector<std::string>& arguments);
+int skill_command(const std::vector<std::string>& arguments);
 int shell_init_command(const std::vector<std::string>& arguments);
 
 // The shell snippet installed by shell-init, exposed so it can be tested.

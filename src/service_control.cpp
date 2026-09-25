@@ -236,6 +236,12 @@ int ServiceControl::install(bool start) {
     ensure_private_directory(paths_.manifest_file.parent_path());
     copy_file_atomically(paths_.source_executable, paths_.installed_executable, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write | std::filesystem::perms::owner_exec);
     copy_file_atomically(paths_.source_asset, paths_.installed_asset, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write | std::filesystem::perms::group_read | std::filesystem::perms::others_read);
+    const std::filesystem::path source_skill = paths_.source_asset.parent_path() / "skill" / "SKILL.md";
+    if (regular_file_without_symlink(source_skill)) {
+        const std::filesystem::path installed_skill = paths_.installed_asset.parent_path() / "skill" / "SKILL.md";
+        ensure_private_directory(installed_skill.parent_path());
+        copy_file_atomically(source_skill, installed_skill, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write | std::filesystem::perms::group_read | std::filesystem::perms::others_read);
+    }
     write_registration(*backend);
     const Json manifest = {
         {"version", 1},
@@ -307,6 +313,7 @@ int ServiceControl::uninstall(bool purge_data) {
     }
     remove_installed_file(paths_.installed_executable);
     remove_installed_file(paths_.installed_asset);
+    remove_installed_file(paths_.installed_asset.parent_path() / "skill" / "SKILL.md");
     remove_installed_file(paths_.manifest_file);
     remove_legacy_launcher();
     if (purge_data) {

@@ -158,6 +158,74 @@ std::string usage_report(const std::string& id) {
     return usage_report_for(*record, store.active);
 }
 
+int accounts_command() {
+    const StoreView store = read_store();
+    for (const ProfileRecord& record : store.profiles) {
+        const bool is_active = store.active.has_value() && store.active->id == record.id;
+        std::cout << (is_active ? "* " : "  ")
+                  << (record.email.has_value() && !record.email->empty() ? *record.email : record.label);
+        if (record.plan == "plus" || record.plan == "pro" || record.plan == "team") {
+            std::string plan = record.plan;
+            plan[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(plan[0])));
+            std::cout << "  " << plan;
+        }
+        if (record.primary_usage.has_value() && record.primary_usage->remaining_percent.has_value()) {
+            std::cout << "  5h " << *record.primary_usage->remaining_percent << "%";
+        }
+        if (record.secondary_usage.has_value() && record.secondary_usage->remaining_percent.has_value()) {
+            std::cout << "  7d " << *record.secondary_usage->remaining_percent << "%";
+        }
+        if (record.available_reset_credits.has_value() && *record.available_reset_credits > 0) {
+            std::cout << "  " << *record.available_reset_credits << " reset";
+        }
+        if (!record.authenticated) {
+            std::cout << "  sign-in required";
+        }
+        std::cout << "\n";
+    }
+    if (store.profiles.empty()) {
+        std::cout << "No accounts are stored yet.\n";
+    }
+    return 0;
+}
+
+int skill_command(const std::vector<std::string>& arguments) {
+    const bool remove = std::find(arguments.begin(), arguments.end(), "--remove") != arguments.end();
+    const std::filesystem::path home = platform::home_directory();
+    const std::filesystem::path directory = home / ".codex" / "skills" / "swapdex";
+    const std::filesystem::path target = directory / "SKILL.md";
+    if (remove) {
+        std::error_code error;
+        if (std::filesystem::is_regular_file(target, error) && !error) {
+            std::filesystem::remove(target, error);
+        }
+        std::error_code directory_error;
+        if (std::filesystem::is_empty(directory, directory_error) && !directory_error) {
+            std::filesystem::remove(directory, directory_error);
+        }
+        std::cout << "Removed the Swapdex skill from Codex.\n";
+        return 0;
+    }
+    const std::vector<std::filesystem::path> candidates = {
+        platform::data_directory() / "swapdex" / "skill" / "SKILL.md",
+        platform::executable_directory() / ".." / "share" / "swapdex" / "skill" / "SKILL.md",
+        platform::executable_directory() / ".." / "assets" / "skill" / "SKILL.md",
+        std::filesystem::path(SWAPDEX_INJECT_SCRIPT_PATH).parent_path().parent_path() / "assets" / "skill" / "SKILL.md",
+    };
+    for (const auto& candidate : candidates) {
+        std::error_code error;
+        if (std::filesystem::is_regular_file(candidate, error) && !error) {
+            ensure_directory(directory, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write | std::filesystem::perms::owner_exec);
+            copy_file_atomically(candidate, target, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write);
+            std::cout << "Installed the Swapdex skill for Codex.\n";
+            std::cout << "Start a new Codex session, then type /swapdex or $swapdex.\n";
+            return 0;
+        }
+    }
+    std::cerr << "swapdex: the bundled skill file could not be found\n";
+    return 1;
+}
+
 int shell_command(const std::vector<std::string>& arguments) {
     bool follow = true;
     std::string explicit_account;
@@ -179,23 +247,7 @@ int shell_command(const std::vector<std::string>& arguments) {
     }
 
     if (!arguments.empty() && (arguments.front() == "--list" || arguments.front() == "-l")) {
-        const StoreView store = read_store();
-        const std::optional<ProfileRecord>& active = store.active;
-        for (const ProfileRecord& record : store.profiles) {
-            const bool is_active = active.has_value() && active->id == record.id;
-            std::cout << (is_active ? "* " : "  ")
-                      << (record.email.has_value() && !record.email->empty() ? *record.email : record.label);
-            if (record.plan == "plus" || record.plan == "pro" || record.plan == "team") {
-                std::string plan = record.plan;
-                plan[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(plan[0])));
-                std::cout << "  " << plan;
-            }
-            if (record.primary_usage.has_value() && record.primary_usage->remaining_percent.has_value()) {
-                std::cout << "  5h " << *record.primary_usage->remaining_percent << "%";
-            }
-            std::cout << "\n";
-        }
-        return 0;
+        return accounts_command();
     }
 
     // A single "--" separates Swapdex options from Codex arguments. It is not passed

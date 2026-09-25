@@ -94,3 +94,4 @@ endif()
 
 install(TARGETS swapdex RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(FILES assets/inject.js DESTINATION ${CMAKE_INSTALL_DATADIR}/swapdex)
+install(FILES assets/skill/SKILL.md DESTINATION ${CMAKE_INSTALL_DATADIR}/swapdex/skill)

@@ -217,6 +217,25 @@ std::filesystem::path state_directory() {
 #endif
 }
 
+std::filesystem::path data_directory() {
+#if defined(_WIN32)
+    if (const auto value = windows_environment("LOCALAPPDATA"); value.has_value()) {
+        return from_native(*value);
+    }
+    return home_directory() / "AppData" / "Local";
+#elif defined(__APPLE__)
+    if (const auto value = environment("XDG_DATA_HOME"); value.has_value()) {
+        return from_native(*value);
+    }
+    return home_directory() / "Library" / "Application Support";
+#else
+    if (const auto value = environment("XDG_DATA_HOME"); value.has_value()) {
+        return from_native(*value);
+    }
+    return home_directory() / ".local" / "share";
+#endif
+}
+
 std::filesystem::path config_directory() {
 #if defined(_WIN32)
     if (const auto value = windows_environment("APPDATA"); value.has_value()) {

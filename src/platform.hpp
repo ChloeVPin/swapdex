@@ -21,6 +21,7 @@ Os current_os();
 // that a user can override the layout without changing code.
 std::filesystem::path home_directory();
 std::filesystem::path state_directory();
+std::filesystem::path data_directory();
 std::filesystem::path config_directory();
 std::filesystem::path cache_directory();
 std::filesystem::path runtime_directory();
