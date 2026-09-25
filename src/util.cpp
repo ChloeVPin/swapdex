@@ -44,6 +44,10 @@ std::optional<std::string> environment_value(const char* name) {
     return std::string(value);
 }
 
+std::filesystem::path codex_control_socket_path(const std::filesystem::path& account_home) {
+    return account_home / "app-server-control" / "app-server-control.sock";
+}
+
 std::filesystem::path home_directory() {
     return platform::home_directory();
 }

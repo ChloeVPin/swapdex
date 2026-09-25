@@ -35,8 +35,10 @@ struct StoreView {
         return nullptr;
     }
 
+    std::filesystem::path account_root;
+
     std::filesystem::path profile_home(const std::string& id) const {
-        return state_root / "profiles" / id;
+        return account_root / id;
     }
 
     std::filesystem::path profile_auth(const std::string& id) const {
@@ -52,6 +54,7 @@ StoreView read_store() {
     ProfileStore store(runtime->state_root, runtime->codex_home, runtime->electron_user_data);
     StoreView view;
     view.state_root = runtime->state_root;
+    view.account_root = store.account_root();
     view.profiles = store.list_existing();
     view.active = store.active_existing();
     return view;

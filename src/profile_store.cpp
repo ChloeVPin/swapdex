@@ -145,6 +145,12 @@ bool regular_file_exists(const std::filesystem::path& path) {
     return std::filesystem::is_regular_file(path, error) && !error;
 }
 
+bool path_entry_exists_safe(const std::filesystem::path& path) {
+    std::error_code error;
+    const std::filesystem::file_status status = std::filesystem::symlink_status(path, error);
+    return !error && status.type() != std::filesystem::file_type::not_found;
+}
+
 bool files_identical(const std::filesystem::path& first, const std::filesystem::path& second) {
     try {
         if (!regular_file_exists(first) || !regular_file_exists(second)) {
@@ -169,20 +175,28 @@ bool files_identical(const std::filesystem::path& first, const std::filesystem::
 
 ProfileStore::ProfileStore(std::filesystem::path state_root, std::filesystem::path shared_codex_home, std::filesystem::path electron_user_data)
     : state_root_(std::move(state_root)),
+      account_root_(home_directory() / ".swapdex-accounts"),
       shared_codex_home_(std::move(shared_codex_home)),
       electron_user_data_(std::move(electron_user_data)) {}
 
 void ProfileStore::initialize() {
     std::lock_guard lock(mutex_);
     ensure_private_directory(state_root_);
+    ensure_private_directory(account_root_);
     ensure_private_directory(state_root_ / "profiles");
     ensure_private_directory(state_root_ / "onboarding");
     ensure_private_directory(state_root_ / "backups");
     ensure_private_directory(shared_codex_home_);
     load_locked();
     recover_transaction_locked();
+    migrate_account_homes_locked();
     prune_pending_placeholders_locked();
     prune_orphan_profiles_locked();
+    for (const ProfileRecord& record : registry_.profiles) {
+        if (codex_control_socket_path(account_root_ / record.id).string().size() >= unix_socket_path_limit) {
+            throw Error("account_home_too_long", "The account storage path is too long for Codex to start. Move your home directory or set XDG_DATA_HOME to a shorter path.");
+        }
+    }
     if (registry_.profiles.empty() && regular_file_exists(shared_codex_home_ / "auth.json")) {
         ProfileRecord record;
         record.id = "current-" + random_identifier(6);
@@ -403,7 +417,29 @@ std::filesystem::path ProfileStore::profile_home(const std::string& id) const {
     if (!valid_profile_id(id)) {
         throw Error("profile_id_invalid", "The account profile identifier is invalid");
     }
-    return state_root_ / "profiles" / id;
+    return account_root_ / id;
+}
+
+void ProfileStore::migrate_account_homes_locked() {
+    const std::filesystem::path legacy_root = state_root_ / "profiles";
+    for (const ProfileRecord& record : registry_.profiles) {
+        const std::filesystem::path legacy = legacy_root / record.id;
+        const std::filesystem::path current = account_root_ / record.id;
+        if (!path_entry_exists_safe(legacy) || path_entry_exists_safe(current)) {
+            continue;
+        }
+        // Both roots sit on the same filesystem, so the move is atomic and an
+        // interrupted migration can only be all or nothing for an account.
+        std::error_code error;
+        std::filesystem::rename(legacy, current, error);
+        if (error) {
+            throw Error("account_home_migration_failed", "Stored account data could not be moved to its new location");
+        }
+    }
+}
+
+std::filesystem::path ProfileStore::account_root() const {
+    return account_root_;
 }
 
 std::filesystem::path ProfileStore::profile_auth(const std::string& id) const {
@@ -536,7 +572,7 @@ void ProfileStore::prune_pending_placeholders_locked() {
 }
 
 void ProfileStore::prune_orphan_profiles_locked() {
-    const std::filesystem::path root = state_root_ / "profiles";
+    const std::filesystem::path root = account_root_;
     std::error_code error;
     if (!std::filesystem::is_directory(root, error) || error) {
         return;

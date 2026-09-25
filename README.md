@@ -27,6 +27,11 @@ the profile menu you never use, while Add account and Settings always stay visib
 account is deleted with its stored credentials and Codex keeps running. Removing the
 account you are signed in with signs you out and clears its credentials.
 
+**Where account data lives.** Each account gets its own short folder in
+`~/.swapdex-accounts`. That location is deliberate: Codex keeps a control socket inside
+`CODEX_HOME`, and a Unix socket path cannot be long, so a deeply nested data directory
+would stop Codex from starting at all.
+
 **The same accounts in your terminal.** Swapdex stores credentials per account, so the
 Codex command line tool can use any of them too:
 

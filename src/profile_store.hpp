@@ -72,6 +72,7 @@ public:
     void restore_live_auth(const std::string& id);
     void activate(const std::string& id);
     std::filesystem::path profile_home(const std::string& id) const;
+    std::filesystem::path account_root() const;
     std::filesystem::path profile_auth(const std::string& id) const;
     std::filesystem::path root() const;
     std::filesystem::path shared_codex_home() const;
@@ -97,6 +98,7 @@ private:
     void recover_transaction_locked();
     void prune_pending_placeholders_locked();
     void prune_orphan_profiles_locked();
+    void migrate_account_homes_locked();
     void complete_removal_locked(const std::string& id, const std::string& replacement_id);
     void remove_live_auth_locked();
     void remove_profile_home_locked(const std::string& id);
@@ -106,6 +108,9 @@ private:
     void restore_live_auth_locked(const std::string& id);
 
     std::filesystem::path state_root_;
+    // Account homes live outside the state root because Codex creates a Unix socket
+    // inside CODEX_HOME, and socket paths are capped near 108 bytes.
+    std::filesystem::path account_root_;
     std::filesystem::path shared_codex_home_;
     std::filesystem::path electron_user_data_;
     mutable std::mutex mutex_;

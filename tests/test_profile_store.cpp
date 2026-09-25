@@ -171,4 +171,20 @@ void test_profile_store() {
     swapdex::test::check(!std::filesystem::exists(state / "transaction.json"), "The interrupted removal journal was not cleared");
     std::error_code error;
     std::filesystem::remove_all(root, error);
+    std::filesystem::remove_all(store.account_root(), error);
+}
+
+void test_account_home_layout() {
+    // Codex creates a control socket inside CODEX_HOME, so an account home has to stay
+    // short enough for a Unix socket path. Check the longest id we actually generate
+    // and confirm the guard would catch a home directory that is too long.
+    const std::filesystem::path account_root = swapdex::home_directory() / ".swapdex-accounts";
+    const std::string longest_generated = "account-" + std::string(16U, 'a');
+    const std::filesystem::path socket = swapdex::codex_control_socket_path(account_root / longest_generated);
+    swapdex::test::check(socket.string().size() < swapdex::unix_socket_path_limit, "The longest account id we generate would overflow the socket path limit");
+    swapdex::test::check(socket.filename() == "app-server-control.sock", "The control socket path is not the one Codex creates");
+
+    const std::filesystem::path deep_home = std::filesystem::path("/home") / std::string(60U, 'x');
+    const std::filesystem::path deep_socket = swapdex::codex_control_socket_path(deep_home / longest_generated);
+    swapdex::test::check(deep_socket.string().size() >= swapdex::unix_socket_path_limit, "The socket length guard would not notice an over long home directory");
 }
