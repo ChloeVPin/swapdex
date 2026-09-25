@@ -6,6 +6,7 @@
 #include <csignal>
 #include <iostream>
 #include <pthread.h>
+#include <sys/select.h>
 #include <sys/stat.h>
 #include <thread>
 #include <vector>
