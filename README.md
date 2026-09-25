@@ -93,17 +93,22 @@ None of these touch Codex itself.
 Swapdex is written for all three, but only one of them has been run on real hardware.
 Please read this before you install it.
 
-| Platform | Status | How it starts |
-| --- | --- | --- |
-| Linux | **Tested daily** on Linux Mint | a systemd user service |
-| macOS | Experimental, not tested on a Mac | a launchd agent |
-| Windows | Experimental, not tested on Windows | a login item |
+| Platform | Builds and passes tests | Tested against a real signed in app | How it starts |
+| --- | --- | --- | --- |
+| Linux | yes, in CI and on this machine | yes, daily | a systemd user service |
+| macOS | yes, in CI | no, never run on a Mac | a launchd agent |
+| Windows | **no, does not compile yet** | no | a login item |
 
 Linux is the only platform with an end to end test against a signed in app, so that is
-the only one this project calls supported. The macOS and Windows code paths compile and
-are wired up, but the desktop app connection on those platforms still needs work: the
-local browser connection is written against a POSIX process transport that Windows does
-not have. Expect to run into the app not attaching on Windows.
+the only one this project calls supported. macOS compiles cleanly and passes the test
+suite on every commit, but nobody has run it against a real app yet, so treat it as
+unproven rather than working.
+
+Windows does not build. The local browser connection and the app-server transport are
+written against POSIX pipes, poll, and inherited file descriptors, and the Windows
+equivalents have not been written. The build job for it is present and expected to fail,
+so the gap stays visible. Nothing about the account switching, credentials, or settings
+is Windows specific, so this is a transport port rather than a redesign.
 
 If you are on macOS or Windows and it works for you, that is genuinely useful
 information and an issue describing what happened is welcome.
