@@ -39,10 +39,10 @@
 #include <cerrno>
 #include <csignal>
 #include <fcntl.h>
-#if !defined(__APPLE__)
 #include <pwd.h>
-#include <sys/file.h>
 #include <sys/wait.h>
+#if !defined(__APPLE__)
+#include <sys/file.h>
 #endif
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -181,7 +181,7 @@ std::filesystem::path home_directory() {
         }
     }
 #else
-    if (const passwd* entry = getpwuid(getuid()); entry != nullptr && entry->pw_dir != nullptr) {
+    if (const struct passwd* entry = getpwuid(getuid()); entry != nullptr && entry->pw_dir != nullptr) {
         return from_native(entry->pw_dir);
     }
 #endif
@@ -430,7 +430,11 @@ void sync_directory(const std::filesystem::path& path) {
 #if defined(_WIN32)
     static_cast<void>(path);
 #else
+#if defined(__linux__)
     const int descriptor = ::open(path.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+#else
+    const int descriptor = ::open(path.c_str(), O_RDONLY);
+#endif
     if (descriptor < 0) {
         return;
     }
