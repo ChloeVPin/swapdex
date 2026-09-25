@@ -159,6 +159,25 @@ std::string usage_report(const std::string& id) {
 }
 
 int shell_command(const std::vector<std::string>& arguments) {
+    bool follow = true;
+    std::string explicit_account;
+    bool account_given = false;
+    std::vector<std::string> rest;
+    for (std::size_t index = 0; index < arguments.size(); ++index) {
+        const std::string& argument = arguments[index];
+        if (argument == "--no-follow") {
+            follow = false;
+            continue;
+        }
+        if (argument == "--account" && index + 1U < arguments.size()) {
+            explicit_account = arguments[index + 1U];
+            account_given = true;
+            ++index;
+            continue;
+        }
+        rest.push_back(argument);
+    }
+
     if (!arguments.empty() && (arguments.front() == "--list" || arguments.front() == "-l")) {
         const StoreView store = read_store();
         const std::optional<ProfileRecord>& active = store.active;
@@ -179,7 +198,41 @@ int shell_command(const std::vector<std::string>& arguments) {
         return 0;
     }
 
-    const std::string term = arguments.empty() ? std::string() : arguments.front();
+    // A single "--" separates Swapdex options from Codex arguments. It is not passed
+    // along, otherwise Codex would read it as the end of its own options.
+    if (!rest.empty() && rest.front() == "--") {
+        rest.erase(rest.begin());
+    }
+
+    std::string term = account_given ? explicit_account : std::string();
+    if (!account_given && !rest.empty() && rest.front().rfind("--", 0) != 0) {
+        // A leading word that names exactly one stored account selects it, which keeps
+        // "swapdex shell work" working. Anything else is passed straight to Codex.
+        const AccountMatch probe = resolve_account(rest.front());
+        if (!probe.id.empty() && !probe.ambiguous) {
+            term = rest.front();
+            rest.erase(rest.begin());
+            if (!rest.empty() && rest.front() == "--") {
+                rest.erase(rest.begin());
+            }
+        }
+    }
+    const std::vector<std::string> forwarded = rest;
+
+    if (!follow) {
+        const std::filesystem::path cli = platform::codex_cli_binary();
+        if (cli.empty() || !std::filesystem::is_regular_file(cli)) {
+            std::cerr << "swapdex: the Codex command line tool was not found on this machine\n";
+            return 1;
+        }
+        std::vector<std::string> command;
+        command.push_back(platform::to_native(cli));
+        for (const std::string& argument : forwarded) {
+            command.push_back(argument);
+        }
+        return platform::run_command(command, {});
+    }
+
     const AccountMatch match = resolve_account(term);
     if (match.ambiguous) {
         std::cerr << "swapdex: more than one account matches that name\n";
@@ -212,10 +265,6 @@ int shell_command(const std::vector<std::string>& arguments) {
         return 1;
     }
 
-    std::vector<std::string> forwarded = arguments;
-    if (!term.empty()) {
-        forwarded.erase(forwarded.begin());
-    }
     std::vector<std::string> command;
     command.push_back(platform::to_native(cli));
     for (const std::string& argument : forwarded) {
@@ -234,6 +283,148 @@ int usage_command() {
         return 0;
     }
     std::cout << usage_report(store.active->id);
+    return 0;
+}
+
+std::string shell_snippet(const std::string& shell) {
+    const std::string marker_begin = "# >>> swapdex >>>";
+    const std::string marker_end = "# <<< swapdex <<<";
+    std::string body;
+    body += marker_begin + "\n";
+    body += "# Codex runs through Swapdex so terminal sessions use the account signed in to the app.\n";
+    body += "# Bypass this for one command with SWAPDEX_FOLLOW=0, or run swapdex shell --no-follow.\n";
+    body += "codex() {\n";
+    body += "  if [ -n \"${SWAPDEX_FOLLOW:-}\" ]; then\n";
+    body += "    command codex \"$@\"\n";
+    body += "    return $?\n";
+    body += "  fi\n";
+    body += "  command swapdex shell \"$@\"\n";
+    body += "}\n";
+    body += marker_end + "\n";
+    static_cast<void>(shell);
+    return body;
+}
+
+namespace {
+
+std::vector<std::filesystem::path> shell_startup_files(const std::string& shell) {
+    const std::filesystem::path home = platform::home_directory();
+    if (shell == "zsh") {
+        return {home / ".zshrc"};
+    }
+    if (shell == "bash") {
+        return {home / ".bashrc"};
+    }
+    if (shell == "fish") {
+        return {home / ".config" / "fish" / "config.fish"};
+    }
+    return {};
+}
+
+void remove_snippet_from(std::string& contents) {
+    const std::string begin = "# >>> swapdex >>>";
+    const std::string end = "# <<< swapdex <<<";
+    const std::size_t start = contents.find(begin);
+    if (start == std::string::npos) {
+        return;
+    }
+    const std::size_t finish = contents.find(end, start);
+    if (finish == std::string::npos) {
+        return;
+    }
+    const std::size_t tail = contents.find('\n', finish);
+    contents.erase(start, tail == std::string::npos ? contents.size() - start : tail - start + 1U);
+}
+
+}
+
+int shell_init_command(const std::vector<std::string>& arguments) {
+    const bool uninstall = std::find(arguments.begin(), arguments.end(), "--remove") != arguments.end();
+    std::string shell = "bash";
+    const std::optional<std::string> from_environment = environment_value("SHELL");
+    if (from_environment.has_value()) {
+        const std::string name = platform::from_native(*from_environment).filename().string();
+        if (name == "zsh" || name == "bash" || name == "fish") {
+            shell = name;
+        }
+    }
+    const std::vector<std::filesystem::path> targets = shell_startup_files(shell);
+    if (targets.empty()) {
+        std::cerr << "swapdex: set SHELL to bash, zsh, or fish and run this again\n";
+        return 1;
+    }
+    const std::filesystem::path target = targets.front();
+    std::string contents;
+    std::error_code exists_error;
+    if (std::filesystem::is_regular_file(target, exists_error) && !exists_error) {
+        contents = read_file(target, 4U * 1024U * 1024U);
+    }
+    remove_snippet_from(contents);
+    if (!uninstall) {
+        if (!contents.empty() && contents.back() != '\n') {
+            contents.push_back('\n');
+        }
+        contents += "\n" + shell_snippet(shell);
+    }
+    const std::filesystem::perms permissions = std::filesystem::is_regular_file(target)
+        ? std::filesystem::status(target).permissions()
+        : (std::filesystem::perms::owner_read | std::filesystem::perms::owner_write);
+    if (uninstall) {
+        write_file_atomically(target, contents, permissions);
+        std::cout << "Removed the Swapdex codex wrapper from " << target.string() << "\n";
+        return 0;
+    }
+    write_file_atomically(target, contents, permissions);
+    std::cout << "Added the Swapdex codex wrapper to " << target.string() << "\n";
+    std::cout << "Open a new terminal, or run: source " << target.string() << "\n";
+    std::cout << "Bypass it any time with SWAPDEX_FOLLOW=0 codex\n";
+    return 0;
+}
+
+int statusline_command(const std::vector<std::string>& arguments) {
+    const bool apply = std::find(arguments.begin(), arguments.end(), "--apply") != arguments.end();
+    const std::string recommended = "status_line = [\"five-hour-limit\", \"weekly-limit\"]";
+    if (!apply) {
+        std::cout << "Codex draws its status line itself, and Swapdex never renders into it.\n";
+        std::cout << "The built in limit items already show the right account once the terminal\n";
+        std::cout << "runs through swapdex shell, because the CLI is authenticated as that account.\n\n";
+        std::cout << "To turn those two items on, either run /statusline inside Codex, or add this\n";
+        std::cout << "to the [tui] section of your Codex config:\n\n";
+        std::cout << "  " << recommended << "\n\n";
+        std::cout << "Or let Swapdex add it for you, keeping a backup: swapdex statusline --apply\n";
+        return 0;
+    }
+
+    const std::filesystem::path home = platform::home_directory();
+    const std::filesystem::path config = home / ".codex" / "config.toml";
+    std::error_code error;
+    if (!std::filesystem::is_regular_file(config, error) || error) {
+        std::cerr << "swapdex: no Codex config was found at " << config.string() << "\n";
+        std::cerr << "Start Codex once, then run this again.\n";
+        return 1;
+    }
+    std::string contents = read_file(config, 4U * 1024U * 1024U);
+    if (contents.find("status_line") != std::string::npos) {
+        std::cerr << "swapdex: your config already sets a status line, so nothing was changed.\n";
+        std::cerr << "Edit the [tui] status_line list yourself if you want a different set.\n";
+        return 1;
+    }
+    const std::string backup = config.string() + ".swapdex-backup";
+    write_file_atomically(backup, contents, std::filesystem::status(config).permissions());
+    if (contents.find("[tui]") != std::string::npos) {
+        const std::size_t section = contents.find("[tui]");
+        const std::size_t insert = contents.find('\n', section);
+        contents.insert(insert + 1U, "  " + recommended + "\n");
+    } else {
+        if (!contents.empty() && contents.back() != '\n') {
+            contents.push_back('\n');
+        }
+        contents += "\n[tui]\n  " + recommended + "\n";
+    }
+    write_file_atomically(config, contents, std::filesystem::status(config).permissions());
+    std::cout << "Added the rate limit items to your Codex status line.\n";
+    std::cout << "A backup of your previous config is at " << backup << "\n";
+    std::cout << "Start a new Codex session to see it.\n";
     return 0;
 }
 

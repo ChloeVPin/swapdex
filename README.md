@@ -41,6 +41,22 @@ swapdex whoami                        # who the terminal is set to
 still work. Each account keeps its own session history, because the CLI stores that
 under the account it was started with.
 
+To have plain `codex` follow the account signed in to the app, run this once:
+
+```sh
+swapdex shell-init
+```
+
+It adds a small wrapper to your shell startup file and never touches anything else in
+it. Bypass it for a single command with `SWAPDEX_FOLLOW=0 codex`, or remove it with
+`swapdex shell-init --remove`.
+
+**Limits inside the terminal.** Codex draws its own status line, and Swapdex never
+renders into it. But because the CLI is authenticated as whichever account you picked,
+Codex's built in rate limit items show that account's real limits. To turn them on, run
+`/statusline` inside Codex, or let Swapdex add them for you with
+`swapdex statusline --apply`, which keeps a backup of your config.
+
 ## Install
 
 Swapdex supports macOS, Linux, and Windows. Pick the line for your system.
@@ -81,6 +97,8 @@ To reinstall a newer version later, run the same line again.
 | `swapdex shell --list` | List accounts the terminal can use. |
 | `swapdex usage` | Show limits and credits for the signed in account. |
 | `swapdex whoami` | Show which account the terminal would use. |
+| `swapdex shell-init` | Make plain `codex` follow the app account. |
+| `swapdex statusline` | Explain and optionally enable the rate limit items. |
 
 None of these touch Codex itself.
 
@@ -172,5 +190,6 @@ install.ps1     one line installer for Windows
 ## Status
 
 Version 0.2.0. Built and verified on Linux against the current Codex desktop release.
-macOS and Windows builds are produced by the same source and are covered by continuous
-integration.
+macOS and Windows are built and tested by continuous integration, but the desktop
+integration on those platforms has not been verified on real hardware yet, so treat it
+as experimental there.

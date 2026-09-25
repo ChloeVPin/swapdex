@@ -23,6 +23,8 @@ void print_usage() {
               << "  swapdex shell [--list | account] [codex arguments]\n"
               << "  swapdex usage\n"
               << "  swapdex whoami\n"
+              << "  swapdex statusline [--apply]\n"
+              << "  swapdex shell-init [--remove]\n"
               << "  swapdex version\n"
               << "  swapdex help\n";
 }
@@ -93,6 +95,12 @@ int main(int argc, char** argv) {
         }
         if (command == "whoami" && arguments.size() == 1) {
             return swapdex::whoami_command();
+        }
+        if (command == "statusline" && (arguments.size() == 1 || (arguments.size() == 2 && arguments[1] == "--apply"))) {
+            return swapdex::statusline_command(std::vector<std::string>(arguments.begin() + 1, arguments.end()));
+        }
+        if (command == "shell-init" && (arguments.size() == 1 || (arguments.size() == 2 && arguments[1] == "--remove"))) {
+            return swapdex::shell_init_command(std::vector<std::string>(arguments.begin() + 1, arguments.end()));
         }
         if (command == "version" && arguments.size() == 1) {
             std::cout << SWAPDEX_VERSION << "\n";

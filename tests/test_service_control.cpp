@@ -240,6 +240,13 @@ void test_shell_bridge() {
     swapdex::test::check(report.find("12.50") != std::string::npos, "The usage report lost the credit balance");
     swapdex::test::check(report.find("2 available") != std::string::npos, "The usage report lost the reset credits");
 
+    const std::string snippet = swapdex::shell_snippet("bash");
+    swapdex::test::check(snippet.find("# >>> swapdex >>>") != std::string::npos, "The shell snippet has no begin marker");
+    swapdex::test::check(snippet.find("# <<< swapdex <<<") != std::string::npos, "The shell snippet has no end marker");
+    swapdex::test::check(snippet.find("SWAPDEX_FOLLOW") != std::string::npos, "The shell snippet offers no bypass");
+    swapdex::test::check(snippet.find("command swapdex shell") != std::string::npos, "The shell snippet does not route through Swapdex");
+    swapdex::test::check(snippet.find("command codex") != std::string::npos, "The shell snippet does not fall back to the real codex");
+
     const std::string other = swapdex::usage_report_for(secondary, active);
     swapdex::test::check(other.find("stored, not signed in") != std::string::npos, "A stored account was reported as signed in");
     swapdex::test::check(other.find("Pro") != std::string::npos, "A stored account lost its plan");

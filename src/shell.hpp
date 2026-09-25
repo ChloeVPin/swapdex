@@ -30,4 +30,14 @@ int shell_command(const std::vector<std::string>& arguments);
 int usage_command();
 int whoami_command();
 
+// The Codex status line only renders built in segments, so Swapdex never renders into
+// it. What Swapdex does is make the built in limit segments correct by choosing the
+// account the terminal runs as. These commands print, and optionally apply, the
+// segment list that surfaces those limits.
+int statusline_command(const std::vector<std::string>& arguments);
+int shell_init_command(const std::vector<std::string>& arguments);
+
+// The shell snippet installed by shell-init, exposed so it can be tested.
+std::string shell_snippet(const std::string& shell);
+
 }
