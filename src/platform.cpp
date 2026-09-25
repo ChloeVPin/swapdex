@@ -39,11 +39,13 @@
 #include <cerrno>
 #include <csignal>
 #include <fcntl.h>
+#if !defined(__APPLE__)
 #include <pwd.h>
 #include <sys/file.h>
+#include <sys/wait.h>
+#endif
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <sys/wait.h>
 #include <unistd.h>
 #endif
 
@@ -289,19 +291,14 @@ std::filesystem::path executable_path() {
         return std::filesystem::path(std::wstring(buffer, length));
     }
 #elif defined(__APPLE__)
-    std::error_code error;
-    const fs::path resolved = fs::read_symlink("/proc/self/exe", error);
-    if (!error && !resolved.empty()) {
-        return resolved;
-    }
     uint32_t size = 0;
     _NSGetExecutablePath(nullptr, &size);
     if (size > 0) {
         std::string buffer(size, '\0');
         if (_NSGetExecutablePath(buffer.data(), &size) == 0) {
             std::error_code resolve_error;
-            const fs::path canonical = fs::canonical(fs::path(buffer.c_str()), resolve_error);
-            return resolve_error ? fs::path(buffer.c_str()) : canonical;
+            const std::filesystem::path canonical = std::filesystem::canonical(std::filesystem::path(buffer.c_str()), resolve_error);
+            return resolve_error ? std::filesystem::path(buffer.c_str()) : canonical;
         }
     }
 #else
