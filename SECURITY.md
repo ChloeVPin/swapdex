@@ -29,3 +29,11 @@ Swapdex injects an interface layer into the Codex renderer at runtime. It does n
 modify the installed application on disk. Any code with access to your user account can
 already read your credentials, so this does not widen the trust boundary, but it is worth
 knowing that the interface layer runs with full renderer privileges.
+
+## Platforms
+
+Swapdex supports macOS, Linux, and Windows. Each platform stores credentials the same
+way, with owner only permissions, and each registers itself to start at sign in through
+its own mechanism: systemd on Linux, a LaunchAgent on macOS, and the per user Run key
+on Windows. Credentials, prompts, and tokens are never written anywhere else on any
+platform.

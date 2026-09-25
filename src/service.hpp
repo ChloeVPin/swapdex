@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <deque>
 #include <filesystem>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -88,7 +89,7 @@ private:
     std::optional<ProfileStore> store_;
     std::optional<AppServerClient> app_server_;
     std::string active_session_id_;
-    int singleton_fd_ = -1;
+    std::shared_ptr<platform::InstanceLock> singleton_lock_;
 };
 
 }

@@ -1,3 +1,4 @@
+#include "platform.hpp"
 #include "util.hpp"
 
 #include <algorithm>
@@ -8,13 +9,10 @@
 #include <cstring>
 #include <fcntl.h>
 #include <iomanip>
-#include <pwd.h>
 #include <sstream>
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <unistd.h>
 
-#include <dirent.h>
 
 namespace swapdex {
 namespace {
@@ -47,56 +45,31 @@ std::optional<std::string> environment_value(const char* name) {
 }
 
 std::filesystem::path home_directory() {
-    if (const auto value = environment_value("HOME"); value.has_value()) {
-        return std::filesystem::path(*value);
-    }
-    const passwd* entry = getpwuid(getuid());
-    if (entry != nullptr && entry->pw_dir != nullptr) {
-        return std::filesystem::path(entry->pw_dir);
-    }
-    throw Error("home_unavailable", "Unable to determine the user home directory");
+    return platform::home_directory();
 }
 
 std::filesystem::path state_directory() {
-    if (const auto value = environment_value("XDG_STATE_HOME"); value.has_value()) {
-        return std::filesystem::path(*value);
-    }
-    return home_directory() / ".local" / "state";
+    return platform::state_directory();
 }
 
 std::filesystem::path config_directory() {
-    if (const auto value = environment_value("XDG_CONFIG_HOME"); value.has_value()) {
-        return std::filesystem::path(*value);
-    }
-    return home_directory() / ".config";
+    return platform::config_directory();
 }
 
 std::filesystem::path cache_directory() {
-    if (const auto value = environment_value("XDG_CACHE_HOME"); value.has_value()) {
-        return std::filesystem::path(*value);
-    }
-    return home_directory() / ".cache";
+    return platform::cache_directory();
 }
 
 std::filesystem::path runtime_directory() {
-    if (const auto value = environment_value("XDG_RUNTIME_DIR"); value.has_value()) {
-        return std::filesystem::path(*value);
-    }
-    return cache_directory();
+    return platform::runtime_directory();
 }
 
 std::filesystem::path default_codex_home() {
-    if (const auto value = environment_value("CODEX_HOME"); value.has_value()) {
-        return std::filesystem::path(*value);
-    }
-    return home_directory() / ".codex";
+    return platform::default_codex_home();
 }
 
 std::filesystem::path default_electron_user_data() {
-    if (const auto value = environment_value("CODEX_ELECTRON_USER_DATA_PATH"); value.has_value()) {
-        return std::filesystem::path(*value);
-    }
-    return config_directory() / "Codex";
+    return platform::default_electron_user_data();
 }
 
 void ensure_directory(const std::filesystem::path& path, std::filesystem::perms permissions) {
@@ -385,44 +358,17 @@ bool running_under_same_process_group(pid_t first, pid_t second) {
     if (first <= 0 || second <= 0) {
         return false;
     }
+#if defined(_WIN32)
+    static_cast<void>(first);
+    static_cast<void>(second);
+    return false;
+#else
     return getpgid(first) == getpgid(second);
+#endif
 }
 
 std::optional<pid_t> running_unmanaged_chatgpt(pid_t managed_process_group) {
-    DIR* directory = opendir("/proc");
-    if (directory == nullptr) {
-        throw Error("process_scan_failed", "Unable to inspect running applications");
-    }
-    std::error_code error;
-    const std::filesystem::path expected = std::filesystem::canonical(SWAPDEX_CHATGPT_BINARY, error);
-    std::optional<pid_t> result;
-    while (dirent* entry = readdir(directory)) {
-        if (entry->d_name[0] < '0' || entry->d_name[0] > '9') {
-            continue;
-        }
-        pid_t pid = 0;
-        try {
-            pid = static_cast<pid_t>(std::stol(entry->d_name));
-        } catch (const std::exception&) {
-            continue;
-        }
-        std::array<char, 4096> buffer {};
-        const std::string path = "/proc/" + std::to_string(pid) + "/exe";
-        const ssize_t count = readlink(path.c_str(), buffer.data(), buffer.size() - 1U);
-        if (count <= 0) {
-            continue;
-        }
-        buffer[static_cast<std::size_t>(count)] = '\0';
-        std::filesystem::path actual(buffer.data());
-        if ((!error && actual == expected) || actual == std::filesystem::path(SWAPDEX_CHATGPT_BINARY)) {
-            if (managed_process_group <= 0 || getpgid(pid) != managed_process_group) {
-                result = pid;
-                break;
-            }
-        }
-    }
-    closedir(directory);
-    return result;
+    return platform::running_unmanaged_chatgpt(managed_process_group);
 }
 
 std::vector<std::string> sanitized_environment(const std::vector<std::pair<std::string, std::string>>& overrides) {
@@ -456,13 +402,7 @@ std::vector<std::string> sanitized_environment(const std::vector<std::pair<std::
 }
 
 std::string executable_directory() {
-    std::array<char, 4096> buffer {};
-    const ssize_t count = readlink("/proc/self/exe", buffer.data(), buffer.size() - 1U);
-    if (count <= 0) {
-        return std::filesystem::current_path().string();
-    }
-    buffer[static_cast<std::size_t>(count)] = '\0';
-    return std::filesystem::path(buffer.data()).parent_path().string();
+    return platform::to_native(platform::executable_directory());
 }
 
 }

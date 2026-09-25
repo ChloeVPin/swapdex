@@ -3,9 +3,12 @@
 #include <cstdint>
 #include <filesystem>
 #include <mutex>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
+
+#include "platform.hpp"
 
 namespace swapdex {
 
@@ -74,7 +77,7 @@ public:
     std::filesystem::path shared_codex_home() const;
     std::filesystem::path electron_user_data() const;
     std::filesystem::path onboarding_user_data(const std::string& id) const;
-    void set_singleton_lock(int fd);
+    void set_singleton_lock(std::shared_ptr<platform::InstanceLock> lock);
 
 private:
     struct Registry {
@@ -107,7 +110,7 @@ private:
     std::filesystem::path electron_user_data_;
     mutable std::mutex mutex_;
     Registry registry_;
-    int singleton_fd_ = -1;
+    std::shared_ptr<platform::InstanceLock> singleton_lock_;
 };
 
 }

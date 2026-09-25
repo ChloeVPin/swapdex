@@ -1,0 +1,110 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux
+            os: ubuntu-latest
+            archive: swapdex-linux-x64.tar.gz
+            folder: swapdex
+          - name: macos
+            os: macos-latest
+            archive: swapdex-macos-arm64.tar.gz
+            folder: swapdex
+          - name: windows
+            os: windows-latest
+            archive: swapdex-windows-x64.zip
+            folder: swapdex
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Stage the bundle
+        shell: bash
+        run: |
+          mkdir -p staging/${{ matrix.folder }}
+          cp assets/inject.js staging/${{ matrix.folder }}/inject.js
+          cp LICENSE staging/${{ matrix.folder }}/LICENSE
+          if [ -f build/swapdex.exe ]; then
+            cp build/swapdex.exe staging/${{ matrix.folder }}/swapdex.exe
+          elif [ -f build/Release/swapdex.exe ]; then
+            cp build/Release/swapdex.exe staging/${{ matrix.folder }}/swapdex.exe
+          else
+            cp build/swapdex staging/${{ matrix.folder }}/swapdex
+          fi
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            7z a -tzip staging/${{ matrix.archive }} "staging/${{ matrix.folder }}"/* >/dev/null
+          else
+            tar -czf staging/${{ matrix.archive }} -C staging ${{ matrix.folder }}
+          fi
+
+      - name: Upload bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: bundle-${{ matrix.name }}
+          path: staging/${{ matrix.archive }}
+          if-no-files-found: error
+
+  publish:
+    needs: package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Collect release assets
+        run: |
+          mkdir -p release
+          find artifacts -name 'swapdex-*.tar.gz' -o -name 'swapdex-*.zip' | while read -r file; do
+            cp "$file" release/
+          done
+          cp install.sh release/install.sh
+          cp install.ps1 release/install.ps1
+          ls -la release
+      - name: Publish the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          generate_release_notes: true
+          body: |
+            Swapdex attaches to the Codex app you already have. It never installs or replaces Codex.
+
+            Install in one line:
+
+            macOS and Linux:
+
+            ```
+            curl -fsSL https://raw.githubusercontent.com/ChloeVPin/swapdex/main/install.sh | sh
+            ```
+
+            Windows, in PowerShell:
+
+            ```
+            irm https://raw.githubusercontent.com/ChloeVPin/swapdex/main/install.ps1 | iex
+            ```

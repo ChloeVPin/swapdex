@@ -4,10 +4,9 @@
 #include <cerrno>
 #include <chrono>
 #include <cctype>
-#include <fcntl.h>
 #include <system_error>
-#include <unistd.h>
 
+#include "platform.hpp"
 #include "util.hpp"
 
 namespace swapdex {
@@ -430,9 +429,9 @@ std::filesystem::path ProfileStore::onboarding_user_data(const std::string& id) 
     return state_root_ / "onboarding" / id;
 }
 
-void ProfileStore::set_singleton_lock(int fd) {
-    std::lock_guard lock(mutex_);
-    singleton_fd_ = fd;
+void ProfileStore::set_singleton_lock(std::shared_ptr<platform::InstanceLock> guard) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    singleton_lock_ = std::move(guard);
 }
 
 void ProfileStore::load_locked() {
@@ -664,18 +663,10 @@ void ProfileStore::recover_transaction_locked() {
 }
 
 void ProfileStore::remove_file_durable(const std::filesystem::path& path) {
-    if (unlink(path.c_str()) != 0 && errno != ENOENT) {
-        throw Error("file_remove_failed", "Unable to remove a transaction file");
-    }
-    const std::filesystem::path parent = path.parent_path();
-    const int descriptor = open(parent.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
-    if (descriptor < 0) {
-        throw Error("directory_open_failed", "Unable to open a transaction directory");
-    }
-    const int result = fsync(descriptor);
-    close(descriptor);
-    if (result != 0) {
-        throw Error("directory_sync_failed", "Unable to synchronize a transaction directory");
+    try {
+        platform::remove_file_durable(path);
+    } catch (const std::exception&) {
+        throw Error("file_remove_failed", "Unable to remove a Swapdex file");
     }
 }
 

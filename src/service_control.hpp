@@ -1,10 +1,11 @@
 #pragma once
 
 #include <filesystem>
-#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
+
+#include "service_backend.hpp"
 
 namespace swapdex {
 
@@ -19,9 +20,6 @@ struct ServiceControlPaths {
     std::filesystem::path source_asset;
     std::filesystem::path installed_executable;
     std::filesystem::path installed_asset;
-    std::filesystem::path unit_file;
-    std::filesystem::path legacy_desktop_file;
-    std::filesystem::path legacy_desktop_file_fallback;
     std::filesystem::path state_root;
     std::filesystem::path lock_file;
     std::filesystem::path manifest_file;
@@ -30,16 +28,18 @@ struct ServiceControlPaths {
     std::optional<std::string> xdg_state_home;
     std::optional<std::string> codex_home;
     std::optional<std::string> electron_user_data;
+    std::optional<std::filesystem::path> registration_file;
 };
-
-using SystemdCommandRunner = std::function<int(const std::vector<std::string>&)>;
 
 ServiceControlPaths default_service_control_paths();
 std::optional<RuntimePaths> installed_runtime_paths();
 
+// Installs the add-on for the current operating system. Each platform registers
+// itself to start at sign in through its own mechanism, while the command surface
+// stays identical everywhere.
 class ServiceControl {
 public:
-    explicit ServiceControl(ServiceControlPaths paths = default_service_control_paths(), SystemdCommandRunner runner = {});
+    explicit ServiceControl(ServiceControlPaths paths = default_service_control_paths(), ServiceBackend::CommandRunner runner = {});
 
     int install(bool start = true);
     int start();
@@ -48,17 +48,15 @@ public:
     int uninstall(bool purge_data = false);
 
 private:
-    int run(const std::vector<std::string>& arguments) const;
-    int run_optional_systemctl(const std::vector<std::string>& arguments) const;
-    void validate_paths() const;
-    void validate_unit() const;
-    void write_unit() const;
-    void remove_legacy_desktop() const;
+    ServiceRuntime runtime() const;
+    void write_registration(const ServiceBackend& backend) const;
+    void remove_registration(const ServiceBackend& backend) const;
+    void remove_legacy_launcher() const;
     void remove_installed_file(const std::filesystem::path& path) const;
-    void remove_unit() const;
+    void validate_sources() const;
 
     ServiceControlPaths paths_;
-    SystemdCommandRunner runner_;
+    ServiceBackend::CommandRunner runner_;
 };
 
 }

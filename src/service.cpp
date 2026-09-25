@@ -4,13 +4,10 @@
 #include <cerrno>
 #include <chrono>
 #include <csignal>
-#include <fcntl.h>
 #include <iostream>
 #include <pthread.h>
-#include <sys/file.h>
 #include <sys/stat.h>
 #include <thread>
-#include <unistd.h>
 #include <vector>
 
 #include <algorithm>
@@ -226,6 +223,14 @@ void Service::process_ui_events() {
     }
 }
 
+std::filesystem::path chatgpt_binary() {
+    const std::filesystem::path discovered = platform::find_chatgpt_binary();
+    if (discovered.empty()) {
+        throw Error("codex_not_installed", "Swapdex could not find your Codex installation. Install Codex, then start Swapdex again.");
+    }
+    return discovered;
+}
+
 void Service::handle_ui_payload(const std::string& payload) {
     if (payload.empty() || payload.size() > maximum_ui_payload_bytes) {
         return;
@@ -350,7 +355,7 @@ void Service::connect_browser() {
         throw Error("unmanaged_codex_running", "Close the normally launched Codex application before switching");
     }
     ensure_private_directory(store_->electron_user_data());
-    cdp_.emplace(SWAPDEX_CHATGPT_BINARY, store_->shared_codex_home(), store_->electron_user_data());
+    cdp_.emplace(chatgpt_binary(), store_->shared_codex_home(), store_->electron_user_data());
     cdp_->set_event_handler([this](const nlohmann::json& event) {
         if (!event.is_object() || !event.contains("method") || !event.at("method").is_string()) {
             return;
@@ -622,7 +627,7 @@ void Service::launch_onboarding(const std::string& id, bool reauthenticate) {
         return;
     }
     ensure_private_directory(store_->onboarding_user_data(id));
-    CdpPipe onboarding(SWAPDEX_CHATGPT_BINARY, store_->profile_home(id), store_->onboarding_user_data(id));
+    CdpPipe onboarding(chatgpt_binary(), store_->profile_home(id), store_->onboarding_user_data(id));
     try {
         onboarding.start();
     } catch (const std::exception&) {
@@ -837,27 +842,19 @@ std::string Service::find_target(const nlohmann::json& targets) const {
 }
 
 void Service::acquire_singleton_lock() {
-    if (singleton_fd_ >= 0 || !store_.has_value()) {
+    if (singleton_lock_ || !store_.has_value()) {
         return;
     }
-    const std::filesystem::path path = store_->root() / "service.lock";
-    singleton_fd_ = open(path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600);
-    if (singleton_fd_ < 0 || fchmod(singleton_fd_, 0600) != 0 || flock(singleton_fd_, LOCK_EX | LOCK_NB) != 0) {
-        if (singleton_fd_ >= 0) {
-            close(singleton_fd_);
-            singleton_fd_ = -1;
-        }
+    auto lock = std::make_shared<platform::InstanceLock>(store_->root() / "service.lock");
+    if (!lock->acquired()) {
         throw Error("service_already_running", "Another Swapdex service is already running");
     }
-    store_->set_singleton_lock(singleton_fd_);
+    singleton_lock_ = lock;
+    store_->set_singleton_lock(lock);
 }
 
 void Service::release_singleton_lock() {
-    if (singleton_fd_ >= 0) {
-        flock(singleton_fd_, LOCK_UN);
-        close(singleton_fd_);
-        singleton_fd_ = -1;
-    }
+    singleton_lock_.reset();
 }
 
 void Service::start_signal_thread() {

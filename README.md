@@ -1,152 +1,139 @@
 # Swapdex
 
-Swapdex runs the official Codex desktop app as a local service and adds the things
-the app is missing: a real account switcher, credentials that stay ready, live usage
-details, and a settings page that actually shows what is going on.
+Swapdex is an add-on for the Codex desktop app.
 
-It does not patch or modify Codex. The app stays exactly as OpenAI ships it, and
-Swapdex drives it the same way a remote debugger would.
+It attaches to the Codex you already have. It never installs Codex, never updates
+Codex, and never changes the app on disk. If you uninstall Swapdex, Codex is exactly
+as it was.
 
-## The problem it solves
+## What it adds
 
-Using more than one Codex account normally means signing out, signing in, waiting for
-the app to restart, and hoping the right account loaded. Swapdex keeps a separate set of
-credentials for every account you add, so switching is a single click in the profile
-menu. Your conversations, settings, and caches stay per account, and only one account
-is ever signed in at a time.
+**A real account switcher.** Add an account once, then move between accounts from the
+profile menu with one click. No signing out, no signing in, no waiting for the app to
+restart.
 
-## What you get
+**Accounts that stay ready.** Swapdex keeps your credentials warm on a schedule you
+choose, so an account you have not opened in weeks still switches instantly.
 
-**Account switching from the profile menu.** Add an account once, then move between
-accounts without signing in again. The current account sits at the top, saved accounts
-sit below it, and the row you pick becomes the active account.
+**Live usage, where you need it.** Five hour and seven day limits, credit balances,
+reset credits, and the date your next reset lands, shown in the profile menu and on
+the accounts page.
 
-**Accounts that stay warm.** Swapdex refreshes stored credentials on a schedule you
-choose, so an account you have not opened in a week still switches instantly. You can
-also warm a single account on demand. No chats and no model requests are sent while
-warming, it only refreshes the stored session.
+**A settings page with the useful tabs.** Privacy blurs your account names everywhere
+they appear. Accounts lists everything you have stored. Menu lets you hide the rows in
+the profile menu you never use, while Add account and Settings always stay visible.
 
-**Live usage where you need it.** Five hour and seven day limits, general credits,
-reset credits, and the date your next reset lands, shown both in the profile menu and on
-the accounts settings page.
+**Safe removal.** Removing an account always asks you to confirm first. A secondary
+account is deleted with its stored credentials and Codex keeps running. Removing the
+account you are signed in with signs you out and clears its credentials.
 
-**A settings page with the useful tabs.**
+## Install
 
-- *Privacy* turns on a blur for account names everywhere they appear, including the
-  account button at the bottom of the sidebar.
-- *Accounts* lists every stored account with its plan, avatar, usage, credits, warm up
-  control, and a remove button.
-- *Menu* lets you hide optional rows in the profile menu. Add account and Settings stay
-  visible so you can never get locked out.
+Swapdex supports macOS, Linux, and Windows. Pick the line for your system.
 
-**Safe account removal.** Removing an account always asks for confirmation first. A
-secondary account is deleted along with its stored credentials and the app is left
-alone. Removing the account you are signed in with signs you out, deletes its
-credentials, and moves you to another stored account if one is available.
+**macOS and Linux**, in a terminal:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/ChloeVPin/swapdex/main/install.sh | sh
+```
+
+**Windows**, in PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/ChloeVPin/swapdex/main/install.ps1 | iex
+```
+
+That is the whole install. The script picks the build for your machine, installs it,
+and registers it to start when you sign in.
+
+Swapdex does not install Codex. If you do not have it yet, install it from OpenAI
+first, then run the line above. After that, just open Codex as you normally would and
+the profile menu will have your accounts in it.
+
+To reinstall a newer version later, run the same line again.
+
+## Commands
+
+| Command | What it does |
+| --- | --- |
+| `swapdex list` | Show stored accounts and their usage. |
+| `swapdex add "name"` | Add an account and walk through sign in. |
+| `swapdex start` | Start Swapdex now. |
+| `swapdex stop` | Stop Swapdex. |
+| `swapdex status` | Check whether Swapdex is installed and running. |
+| `swapdex uninstall` | Remove Swapdex and keep your accounts. |
+| `swapdex uninstall --purge-data` | Remove Swapdex and delete stored account data. |
+
+None of these touch Codex itself.
 
 ## Requirements
 
-- Linux with systemd user services
-- CMake 3.20 or newer and a C++20 compiler
-- nlohmann_json 3.11 or newer
-- The official ChatGPT or Codex desktop app installed
+- macOS, Linux, or Windows on a 64 bit machine
+- The official Codex desktop app, already installed and signed in
 
-## Install
+## Uninstalling
+
+Run `swapdex uninstall`. Swapdex removes itself and leaves your stored accounts alone
+if you want to reinstall later. Add `--purge-data` and it deletes the stored
+credentials too.
+
+Either way, Codex stays installed and untouched.
+
+## How your data is handled
+
+- Your credentials are stored only on your own machine, in files that only your user
+  account can read.
+- Swapdex has no telemetry, no analytics, and no update checks. It makes no network
+  requests of its own beyond launching Codex and talking to it locally.
+- Your prompts, messages, and tokens are never read, logged, or stored. Only plan
+  names and usage numbers are kept.
+- One account is active at a time. Switching closes Codex before credentials change, so
+  a request can never be billed to the wrong account.
+- The privacy blur hides account names on screen and blocks copying them.
+- Removing an account deletes its stored credentials right away.
+
+## Performance
+
+Measured on a four core machine with 3.5 GB of RAM while idle:
+
+| | With Swapdex | Without |
+| --- | --- | --- |
+| Swapdex itself | about 5 MB and 0.1 percent of one core | not running |
+| Codex total | 4.6 percent of one core | 2.7 percent of one core |
+| Codex total memory | 550 to 575 MB | 522 to 524 MB |
+
+Swapdex is a small background service. The extra time you see comes from the account
+interface and the local connection to Codex, not from Swapdex doing heavy work.
+
+## Troubleshooting
+
+**The profile menu does not show my accounts.** Run `swapdex status`. If Swapdex is
+not running, run `swapdex start`. If Codex was already open before Swapdex, close it
+fully and reopen it.
+
+**Adding an account fails.** Swapdex needs to own the Codex window while it signs a
+new account in. Close any Codex window that is already open, then run
+`swapdex add`.
+
+**Everything looks wrong after a Codex update.** The interface is injected at runtime,
+so a large Codex release can change the markup Swapdex builds on. Pull the newest
+Swapdex and, if it is still wrong, open an issue with the Codex version you are on.
+
+## Building from source
+
+You only need this if you want to change Swapdex itself.
 
 ```sh
 git clone https://github.com/ChloeVPin/swapdex.git
 cd swapdex
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j"$(nproc)"
-./build/swapdex install
-```
-
-The install command copies the binary and the interface asset into place, writes a
-systemd user unit, and starts the service. The app then launches under Swapdex the next
-time you open it.
-
-## Commands
-
-| Command | What it does |
-| --- | --- |
-| `swapdex install` | Install the service and start it. Use `--no-start` to skip starting. |
-| `swapdex start` | Start the service and the app. |
-| `swapdex stop` | Stop the service and the app. |
-| `swapdex status` | Show whether the service is running. |
-| `swapdex list` | List stored accounts and their usage. |
-| `swapdex add "name"` | Add an account and walk through sign in. |
-| `swapdex launch` | Launch the app under Swapdex. |
-| `swapdex uninstall` | Remove the service. Add `--purge-data` to also delete stored accounts. |
-| `swapdex version` | Print the version. |
-
-## How it works
-
-The service starts the Codex desktop app with a DevTools pipe attached, then injects a
-small interface layer into the renderer. That layer is what draws the account rows and
-the settings page, and it sends a short list of commands back to the service over the
-same pipe.
-
-Credentials live in a private state directory, one folder per account, alongside a small
-registry that records which account is active. Switching accounts closes the app,
-swaps the active credentials, and starts the app again. It is the slowest possible
-approach, and that is on purpose: it guarantees the app is never holding two identities
-at once and that no request can be billed to the wrong account.
-
-Warming an account spawns the app's own app server against that account's folder, reads
-the account and rate limit responses, writes them back to the registry, and exits. It
-never sends a chat.
-
-## Privacy and security
-
-- Credentials are written only under your own user account, in files with owner only
-  permissions, inside directories with owner only permissions.
-- Swapdex has no telemetry, no analytics, and no update check. It makes no network
-  requests of its own beyond starting Codex and talking to it locally over a pipe.
-- Prompts, tokens, and message content are never read, logged, or stored. Usage
-  numbers and plan names are the only account data kept.
-- Account switching is a full app restart, so a single account is active at any moment.
-- The privacy blur hides account names on screen and blocks copying them.
-- Removing an account deletes its stored credentials immediately.
-
-## Performance
-
-Measured on a four core machine with 3.5 GB of RAM, idle, over 25 second samples:
-
-| Measurement | With Swapdex | Without |
-| --- | --- | --- |
-| Swapdex service CPU | 0.1 percent of one core | not running |
-| Swapdex service memory | about 5 MB | not running |
-| Codex renderers and app CPU | 4.6 percent of one core | 2.7 percent of one core |
-| Total memory | 550 to 575 MB | 522 to 524 MB |
-
-The service itself is a few megabytes and effectively idle. The rest of the difference
-is the injected interface and the DevTools connection, which is where nearly all of the
-cost sits. For comparison, Codex uses roughly 50 percent of a single core for the first
-couple of minutes after launch regardless of Swapdex.
-
-If memory is tight, closing extra Codex windows and tabs saves far more than disabling
-Swapdex does.
-
-## Development
-
-```sh
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
-cmake --build build -j"$(nproc)"
 ctest --test-dir build --output-on-failure
 ```
 
-Sanitizer build:
-
-```sh
-cmake -S . -B build-sanitize -DCMAKE_BUILD_TYPE=Debug \
-  -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"
-cmake --build build-sanitize -j"$(nproc)"
-ctest --test-dir build-sanitize --output-on-failure
-```
-
-The live interface probe renders the real app and checks the account rows, the settings
-tabs, the interval picker, the removal dialog, and the privacy blur against a running
-Codex instance:
+The tests cover the account store, the service layer, the platform layer, and the
+installer. A live interface probe renders the real app when you want to check the
+interface end to end:
 
 ```sh
 cmake --build build --target swapdex_live_probe
@@ -156,14 +143,15 @@ cmake --build build --target swapdex_live_probe
 ## Project layout
 
 ```
-src/            service, account store, app server client, DevTools pipe, CLI
-assets/         the injected renderer interface
-tests/          unit tests, fakes, and the live interface probe
-packaging/      reserved for distribution files
+src/            the service, account store, platform layer, and CLI
+assets/         the interface that is injected into Codex
+tests/          unit tests and the live interface probe
+install.sh      one line installer for macOS and Linux
+install.ps1     one line installer for Windows
 ```
 
 ## Status
 
-Version 0.2.0, built and verified against the current Codex desktop release. The
-interface is injected at runtime, so a Codex update that changes the profile menu or
-settings markup may need the interface layer adjusted.
+Version 0.2.0. Built and verified on Linux against the current Codex desktop release.
+macOS and Windows builds are produced by the same source and are covered by continuous
+integration.

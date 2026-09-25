@@ -13,8 +13,10 @@ find_package(Threads REQUIRED)
 add_library(swapdex_core
     src/app_server.cpp
     src/cdp.cpp
+    src/platform.cpp
     src/profile_store.cpp
     src/service.cpp
+    src/service_backend.cpp
     src/service_control.cpp
     src/util.cpp
 )
@@ -24,9 +26,20 @@ target_link_libraries(swapdex_core PUBLIC nlohmann_json::nlohmann_json Threads::
 target_compile_options(swapdex_core PRIVATE -Wall -Wextra -Wpedantic -Werror)
 target_compile_definitions(swapdex_core PUBLIC
     SWAPDEX_VERSION="${PROJECT_VERSION}"
-    SWAPDEX_CODEX_BINARY="/usr/lib/chatgpt/resources/codex"
-    SWAPDEX_CHATGPT_BINARY="/usr/lib/chatgpt/ChatGPT"
 )
+
+# The Codex install is discovered at runtime so one build serves every machine.
+if(WIN32)
+    target_compile_definitions(swapdex_core PUBLIC SWAPDEX_CODEX_BINARY="codex.exe" SWAPDEX_CHATGPT_BINARY="Codex.exe")
+elseif(APPLE)
+    target_compile_definitions(swapdex_core PUBLIC SWAPDEX_CODEX_BINARY="/Applications/Codex.app/Contents/Resources/codex" SWAPDEX_CHATGPT_BINARY="/Applications/Codex.app/Contents/MacOS/Codex")
+else()
+    target_compile_definitions(swapdex_core PUBLIC SWAPDEX_CODEX_BINARY="/usr/lib/chatgpt/resources/codex" SWAPDEX_CHATGPT_BINARY="/usr/lib/chatgpt/ChatGPT")
+endif()
+
+if(WIN32)
+    target_link_libraries(swapdex_core PUBLIC advapi32)
+endif()
 target_compile_definitions(swapdex_core PRIVATE
     SWAPDEX_INJECT_SCRIPT_PATH="${PROJECT_SOURCE_DIR}/assets/inject.js"
 )
@@ -62,10 +75,11 @@ if(BUILD_TESTING)
     add_test(NAME service_control COMMAND swapdex_tests service_control)
     add_test(NAME maintenance_schedule COMMAND swapdex_tests maintenance_schedule)
     add_test(NAME service_control_exec COMMAND swapdex_tests service_control_exec)
+    add_test(NAME platform_layer COMMAND swapdex_tests platform_layer)
     add_test(NAME cli_help COMMAND swapdex --help)
     add_test(NAME cli_version COMMAND swapdex version)
     add_test(NAME cli_invalid COMMAND swapdex invalid-command)
-    set_tests_properties(profile_store json_rpc app_server_refresh service_control maintenance_schedule service_control_exec cli_help cli_version cli_invalid PROPERTIES TIMEOUT 30)
+    set_tests_properties(profile_store json_rpc app_server_refresh service_control maintenance_schedule service_control_exec platform_layer cli_help cli_version cli_invalid PROPERTIES TIMEOUT 30)
     set_tests_properties(cli_help PROPERTIES PASS_REGULAR_EXPRESSION "swapdex install")
     set_tests_properties(cli_version PROPERTIES PASS_REGULAR_EXPRESSION "0\\.2\\.0")
     set_tests_properties(cli_invalid PROPERTIES WILL_FAIL TRUE)
