@@ -5,6 +5,7 @@
 
 #include "service.hpp"
 #include "shell.hpp"
+#include "tui.hpp"
 #include "service_control.hpp"
 #include "util.hpp"
 
@@ -25,6 +26,7 @@ void print_usage() {
               << "  swapdex whoami\n"
               << "  swapdex statusline [--apply]\n"
               << "  swapdex shell-init [--remove]\n"
+              << "  swapdex tui [--no-relaunch]\n"
               << "  swapdex version\n"
               << "  swapdex help\n";
 }
@@ -95,6 +97,9 @@ int main(int argc, char** argv) {
         }
         if (command == "whoami" && arguments.size() == 1) {
             return swapdex::whoami_command();
+        }
+        if (command == "tui" && (arguments.size() == 1 || (arguments.size() == 2 && arguments[1] == "--no-relaunch"))) {
+            return swapdex::tui_command(std::vector<std::string>(arguments.begin() + 1, arguments.end()));
         }
         if (command == "statusline" && (arguments.size() == 1 || (arguments.size() == 2 && arguments[1] == "--apply"))) {
             return swapdex::statusline_command(std::vector<std::string>(arguments.begin() + 1, arguments.end()));

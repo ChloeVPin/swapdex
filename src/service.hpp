@@ -50,6 +50,7 @@ private:
     void request_stop();
     void process_ui_events();
     void handle_ui_payload(const std::string& payload);
+    void process_control_request();
     void connect_browser();
     void send_snapshot();
     void refresh_profiles();

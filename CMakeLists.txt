@@ -19,6 +19,7 @@ add_library(swapdex_core
     src/service_backend.cpp
     src/service_control.cpp
     src/shell.cpp
+    src/tui.cpp
     src/util.cpp
 )
 

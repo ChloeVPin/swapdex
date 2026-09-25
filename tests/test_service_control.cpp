@@ -81,6 +81,7 @@ void test_service_control() {
     swapdex::ServiceControlPaths paths = test_paths(root);
     swapdex::ensure_private_directory(paths.state_root);
     const std::filesystem::path registration = expected_registration(runtime_for(paths));
+    const std::string backend_id = swapdex::make_service_backend(runtime_for(paths))->id();
     std::vector<std::vector<std::string>> calls;
     auto runner = [&calls](const std::vector<std::string>& arguments) {
         calls.push_back(arguments);
@@ -103,6 +104,9 @@ void test_service_control() {
     const std::size_t call_count = calls.size();
     control.install(false);
     swapdex::test::check(calls.size() > call_count, "Reinstall did not re-enable autostart");
+    // A reinstall has to stop the running copy, otherwise an update leaves the old
+    // process serving the old binary.
+    swapdex::test::check(has_call_containing(calls, "disable") || backend_id == "windows", "Reinstall did not stop the running install first");
     control.start();
     control.stop();
     control.status();

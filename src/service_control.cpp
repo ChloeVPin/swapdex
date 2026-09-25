@@ -226,6 +226,9 @@ int ServiceControl::install(bool start) {
     }
     validate_sources();
     const std::unique_ptr<ServiceBackend> backend = make_service_backend(runtime(), runner_);
+    // A previous install is already running, so it has to be stopped before the new
+    // binary is started. Without this an update leaves the old process in place.
+    const bool replacing = backend->installed();
     const std::filesystem::path executable_parent = paths_.installed_executable.parent_path();
     const std::filesystem::path asset_parent = paths_.installed_asset.parent_path();
     ensure_directory(executable_parent, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write | std::filesystem::perms::owner_exec | std::filesystem::perms::group_read | std::filesystem::perms::group_exec | std::filesystem::perms::others_read | std::filesystem::perms::others_exec);
@@ -243,6 +246,12 @@ int ServiceControl::install(bool start) {
     };
     write_json_file_atomically(paths_.manifest_file, manifest, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write);
     remove_legacy_launcher();
+    if (replacing) {
+        try {
+            backend->disable();
+        } catch (const std::exception&) {
+        }
+    }
     backend->enable(start);
     std::cout << "Swapdex installed using " << backend->id() << ".\n";
     if (start) {

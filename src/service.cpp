@@ -96,6 +96,7 @@ int Service::run() {
     if (const auto pid = running_unmanaged_chatgpt(-1); pid.has_value()) {
         throw Error("unmanaged_codex_running", "Close the normally launched Codex application before starting Swapdex");
     }
+    ensure_private_directory(store_->root() / "control");
     const auto active = store_->active();
     if (active.has_value()) {
         if (regular_file_exists(codex_home / "auth.json")) {
@@ -182,8 +183,40 @@ void Service::request_stop() {
     maintenance_condition_.notify_all();
 }
 
+void Service::process_control_request() {
+    if (!store_.has_value()) {
+        return;
+    }
+    const std::filesystem::path request_path = store_->root() / "control" / "pending.json";
+    std::error_code error;
+    if (!std::filesystem::is_regular_file(request_path, error) || error) {
+        return;
+    }
+    std::string payload;
+    try {
+        payload = read_file(request_path, maximum_ui_payload_bytes);
+    } catch (const std::exception&) {
+        return;
+    }
+    // Remove the request before acting so a crash mid action cannot replay it, and so
+    // the file is never processed twice.
+    try {
+        platform::remove_file_durable(request_path);
+    } catch (const std::exception&) {
+        return;
+    }
+    try {
+        handle_ui_payload(payload);
+    } catch (const Error&) {
+        report_error("The account action could not be completed");
+    } catch (const std::exception&) {
+        report_error("The account action could not be completed");
+    }
+}
+
 void Service::process_ui_events() {
     while (!stopping_.load()) {
+        process_control_request();
         std::optional<std::string> payload;
         if (cdp_.has_value() && cdp_->running() && !active_session_id_.empty()) {
             try {

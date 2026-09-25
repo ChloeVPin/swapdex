@@ -51,6 +51,19 @@ It adds a small wrapper to your shell startup file and never touches anything el
 it. Bypass it for a single command with `SWAPDEX_FOLLOW=0 codex`, or remove it with
 `swapdex shell-init --remove`.
 
+**A menu in the terminal.** For a visual picker instead of commands:
+
+```sh
+swapdex tui
+```
+
+It draws your accounts with plan and limits, and you press one to switch. Swapdex asks
+the running service to do the swap so there is only ever one writer of your
+credentials, waits for it to finish, and then starts Codex on the same screen as that
+account, so it feels like the terminal just became the other account. `a` adds an
+account, `r` removes one behind a confirmation, and `q` leaves without changing
+anything. Add `--no-relaunch` if you would rather go back to your shell.
+
 **Limits inside the terminal.** Codex draws its own status line, and Swapdex never
 renders into it. But because the CLI is authenticated as whichever account you picked,
 Codex's built in rate limit items show that account's real limits. To turn them on, run
@@ -99,6 +112,7 @@ To reinstall a newer version later, run the same line again.
 | `swapdex whoami` | Show which account the terminal would use. |
 | `swapdex shell-init` | Make plain `codex` follow the app account. |
 | `swapdex statusline` | Explain and optionally enable the rate limit items. |
+| `swapdex tui` | Open the interactive account picker. |
 
 None of these touch Codex itself.
 
