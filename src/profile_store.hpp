@@ -53,7 +53,9 @@ struct RemovalResult {
 
 class ProfileStore {
 public:
-    ProfileStore(std::filesystem::path state_root, std::filesystem::path shared_codex_home, std::filesystem::path electron_user_data);
+    // account_root is required rather than defaulted so that a store built for a test
+    // can never silently fall back to the real account directory.
+    ProfileStore(std::filesystem::path state_root, std::filesystem::path account_root, std::filesystem::path shared_codex_home, std::filesystem::path electron_user_data);
 
     void initialize();
     std::vector<ProfileRecord> list_existing();

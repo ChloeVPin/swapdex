@@ -173,9 +173,9 @@ bool files_identical(const std::filesystem::path& first, const std::filesystem::
 
 }
 
-ProfileStore::ProfileStore(std::filesystem::path state_root, std::filesystem::path shared_codex_home, std::filesystem::path electron_user_data)
+ProfileStore::ProfileStore(std::filesystem::path state_root, std::filesystem::path account_root, std::filesystem::path shared_codex_home, std::filesystem::path electron_user_data)
     : state_root_(std::move(state_root)),
-      account_root_(home_directory() / ".swapdex-accounts"),
+      account_root_(std::move(account_root)),
       shared_codex_home_(std::move(shared_codex_home)),
       electron_user_data_(std::move(electron_user_data)) {}
 

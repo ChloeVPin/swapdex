@@ -317,19 +317,23 @@ int ServiceControl::uninstall(bool purge_data) {
     remove_installed_file(paths_.manifest_file);
     remove_legacy_launcher();
     if (purge_data) {
-        std::error_code error;
-        if (path_entry_exists(paths_.state_root)) {
-            if (std::filesystem::is_symlink(paths_.state_root) || !std::filesystem::is_directory(paths_.state_root, error) || error) {
-                throw Error("purge_path_invalid", "Refusing to purge a non-directory Swapdex state path");
+        // Account homes live outside the state root, so both have to go.
+        for (const std::filesystem::path& root : {paths_.state_root, default_account_root()}) {
+            if (!path_entry_exists(root)) {
+                continue;
             }
-            std::filesystem::remove_all(paths_.state_root, error);
+            std::error_code error;
+            if (std::filesystem::is_symlink(root) || !std::filesystem::is_directory(root, error) || error) {
+                throw Error("purge_path_invalid", "Refusing to purge a non-directory Swapdex data path");
+            }
+            std::filesystem::remove_all(root, error);
             if (error) {
                 throw Error("purge_failed", "Unable to remove Swapdex account data");
             }
         }
-        std::cout << "Swapdex account data removed.\n";
+        std::cout << "Swapdex account data removed, including stored sign ins.\n";
     } else {
-        std::cout << "Swapdex account data preserved.\n";
+        std::cout << "Swapdex account data preserved in " << default_account_root().string() << "\n";
     }
     std::cout << "Swapdex uninstalled.\n";
     return 0;

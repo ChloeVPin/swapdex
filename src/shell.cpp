@@ -51,7 +51,7 @@ StoreView read_store() {
     if (!runtime.has_value()) {
         throw Error("service_not_installed", "Swapdex is not installed. Run the install command first.");
     }
-    ProfileStore store(runtime->state_root, runtime->codex_home, runtime->electron_user_data);
+    ProfileStore store(runtime->state_root, default_account_root(), runtime->codex_home, runtime->electron_user_data);
     StoreView view;
     view.state_root = runtime->state_root;
     view.account_root = store.account_root();

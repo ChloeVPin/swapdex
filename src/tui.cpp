@@ -62,7 +62,7 @@ Loaded load() {
     if (!loaded.runtime.has_value()) {
         return loaded;
     }
-    ProfileStore store(loaded.runtime->state_root, loaded.runtime->codex_home, loaded.runtime->electron_user_data);
+    ProfileStore store(loaded.runtime->state_root, default_account_root(), loaded.runtime->codex_home, loaded.runtime->electron_user_data);
     loaded.profiles = store.list_existing();
     loaded.active = store.active_existing();
     return loaded;
@@ -146,7 +146,7 @@ int relaunch_cli(const std::string& id) {
         report("Swapdex is not installed.");
         return 1;
     }
-    ProfileStore store(loaded.runtime->state_root, loaded.runtime->codex_home, loaded.runtime->electron_user_data);
+    ProfileStore store(loaded.runtime->state_root, default_account_root(), loaded.runtime->codex_home, loaded.runtime->electron_user_data);
     const std::filesystem::path home = store.profile_home(id);
     const std::filesystem::path cli = platform::codex_cli_binary();
     if (cli.empty() || !std::filesystem::is_regular_file(cli)) {

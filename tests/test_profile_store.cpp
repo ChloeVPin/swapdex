@@ -9,7 +9,9 @@
 namespace {
 
 std::filesystem::path test_root() {
-    return std::filesystem::temp_directory_path() / ("swapdex-profile-test-" + swapdex::random_identifier(8));
+    // Kept short on purpose: Codex socket paths have a hard length limit, and these
+    // tests exercise the real store layout.
+    return std::filesystem::temp_directory_path() / ("sw-t-" + swapdex::random_identifier(4));
 }
 
 mode_t permissions_of(const std::filesystem::path& path) {
@@ -30,7 +32,7 @@ void test_profile_store() {
     swapdex::ensure_private_directory(codex);
     swapdex::ensure_private_directory(electron);
     swapdex::write_file_atomically(codex / "auth.json", "{\"tokens\":{\"test\":\"first\"}}\n", std::filesystem::perms::owner_read | std::filesystem::perms::owner_write);
-    swapdex::ProfileStore store(state, codex, electron);
+    swapdex::ProfileStore store(state, state / "accounts", codex, electron);
     store.initialize();
     const auto initial = store.active();
     swapdex::test::check(initial.has_value(), "Initial profile was not created");
@@ -55,7 +57,7 @@ void test_profile_store() {
     swapdex::test::check_equal(*store.active()->credits_balance, std::string("125.50"), "General credits were not recorded");
     swapdex::test::check(store.active()->credits_available, "General credit availability was not recorded");
     swapdex::test::check_equal(*store.active()->available_reset_credits, static_cast<std::int64_t>(3), "Available reset credits were not recorded");
-    swapdex::ProfileStore status_store(state, codex, electron);
+    swapdex::ProfileStore status_store(state, state / "accounts", codex, electron);
     status_store.initialize();
     swapdex::test::check_equal(status_store.find(initial->id)->maintenance_status, std::string("ok"), "Maintenance status was not persisted");
     swapdex::test::check_equal(*status_store.find(initial->id)->credits_balance, std::string("125.50"), "General credits were not persisted");
@@ -63,7 +65,7 @@ void test_profile_store() {
     swapdex::test::check_equal(*status_store.find(initial->id)->available_reset_credits, static_cast<std::int64_t>(3), "Available reset credits were not persisted");
     swapdex::test::check_equal(status_store.find(initial->id)->reset_credits.size(), static_cast<std::size_t>(1), "Reset-credit details were not persisted");
     swapdex::test::check_equal(*status_store.find(initial->id)->reset_credits.front().expires_at, static_cast<std::int64_t>(1893456000), "Reset-credit expiry was not persisted");
-    swapdex::ProfileStore read_only_store(state, codex, electron);
+    swapdex::ProfileStore read_only_store(state, state / "accounts", codex, electron);
     const auto existing_profiles = read_only_store.list_existing();
     const auto existing_active = read_only_store.active_existing();
     swapdex::test::check_equal(existing_profiles.size(), static_cast<std::size_t>(1), "Read-only profile listing returned the wrong count");
@@ -84,7 +86,7 @@ void test_profile_store() {
     swapdex::Json rollback_journal = {{"version", 1}, {"from_id", second.id}, {"to_id", initial->id}, {"had_live_auth", true}};
     swapdex::write_json_file_atomically(state / "transaction.json", rollback_journal, secret_permissions);
     swapdex::write_file_atomically(codex / "auth.json", "{\"tokens\":{\"test\":\"interrupted\"}}\n", secret_permissions);
-    swapdex::ProfileStore rollback_store(state, codex, electron);
+    swapdex::ProfileStore rollback_store(state, state / "accounts", codex, electron);
     rollback_store.initialize();
     swapdex::test::check_equal(rollback_store.active()->id, second.id, "Interrupted switch changed the active profile during rollback");
     swapdex::test::check_equal(swapdex::read_file(codex / "auth.json", 4096), std::string("{\"tokens\":{\"test\":\"second\"}}\n"), "Interrupted switch did not restore live auth");
@@ -93,7 +95,7 @@ void test_profile_store() {
     swapdex::copy_file_atomically(codex / "auth.json", state / "backups" / "active-auth.json", secret_permissions);
     swapdex::Json commit_journal = {{"version", 1}, {"from_id", second.id}, {"to_id", initial->id}, {"had_live_auth", true}};
     swapdex::write_json_file_atomically(state / "transaction.json", commit_journal, secret_permissions);
-    swapdex::ProfileStore commit_store(state, codex, electron);
+    swapdex::ProfileStore commit_store(state, state / "accounts", codex, electron);
     commit_store.initialize();
     swapdex::test::check_equal(commit_store.active()->id, initial->id, "Committed switch lost the active profile");
     swapdex::test::check(!std::filesystem::exists(state / "transaction.json"), "Committed switch journal was not removed");
@@ -133,7 +135,7 @@ void test_profile_store() {
     swapdex::test::check(!store.active().has_value(), "An active account remains after removing the last one");
     swapdex::test::check(!std::filesystem::exists(codex / "auth.json"), "Live credentials survived removing the signed-in account");
     swapdex::test::check(!std::filesystem::exists(state / "backups" / "active-auth.json"), "A stale credential backup survived removal");
-    swapdex::ProfileStore signed_out_store(state, codex, electron);
+    swapdex::ProfileStore signed_out_store(state, state / "accounts", codex, electron);
     signed_out_store.initialize();
     swapdex::test::check(signed_out_store.list().empty(), "Removal was not persisted");
     swapdex::test::check(!signed_out_store.active().has_value(), "A signed-out registry reported an active account");
@@ -162,7 +164,7 @@ void test_profile_store() {
     swapdex::test::check_equal(store.active()->id, promoted_target.id, "Adding an account changed the active account");
     swapdex::Json remove_journal = {{"version", 1}, {"operation", "remove"}, {"from_id", interrupted.id}, {"to_id", ""}, {"had_live_auth", true}};
     swapdex::write_json_file_atomically(state / "transaction.json", remove_journal, secret_permissions);
-    swapdex::ProfileStore interrupted_store(state, codex, electron);
+    swapdex::ProfileStore interrupted_store(state, state / "accounts", codex, electron);
     interrupted_store.initialize();
     swapdex::test::check(!interrupted_store.find(interrupted.id).has_value(), "An interrupted removal was rolled back instead of completed");
     swapdex::test::check(!std::filesystem::exists(interrupted_store.profile_home(interrupted.id)), "An interrupted removal kept stored credentials");
@@ -171,7 +173,34 @@ void test_profile_store() {
     swapdex::test::check(!std::filesystem::exists(state / "transaction.json"), "The interrupted removal journal was not cleared");
     std::error_code error;
     std::filesystem::remove_all(root, error);
-    std::filesystem::remove_all(store.account_root(), error);
+}
+
+void test_account_root_is_explicit() {
+    // A store built for a temporary state directory must never prune or remove anything
+    // under the real account root, so the account root is an explicit argument.
+    namespace fs = std::filesystem;
+    const fs::path root = test_root();
+    const fs::path accounts = root / "accounts";
+    const fs::path codex = root / "codex";
+    const fs::path real_accounts = swapdex::default_account_root();
+    const bool real_exists = fs::exists(real_accounts);
+    const std::size_t real_children = real_exists
+        ? static_cast<std::size_t>(std::distance(fs::directory_iterator(real_accounts), fs::directory_iterator()))
+        : 0U;
+
+    swapdex::ProfileStore store(root, accounts, codex, {});
+    store.initialize();
+    // An empty registry against a real looking tree: the store prunes only what it was
+    // given, so the real account root must be untouched.
+    swapdex::ProfileStore store2(root, accounts, codex, {});
+    store2.initialize();
+    swapdex::test::check(store.account_root() == accounts, "The store ignored the account root it was given");
+    if (real_exists) {
+        const std::size_t after = static_cast<std::size_t>(std::distance(fs::directory_iterator(real_accounts), fs::directory_iterator()));
+        swapdex::test::check(after == real_children, "A temporary store changed the real account root");
+    }
+    std::error_code error;
+    fs::remove_all(root, error);
 }
 
 void test_account_home_layout() {

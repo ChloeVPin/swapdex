@@ -58,6 +58,9 @@ std::string sanitize_label(std::string_view label);
 // exceed this many bytes.
 constexpr std::size_t unix_socket_path_limit = 107U;
 std::filesystem::path codex_control_socket_path(const std::filesystem::path& account_home);
+// Where per account Codex homes live. Callers must pass this to ProfileStore
+// explicitly so that a store built for a test can never be pointed at the real one.
+std::filesystem::path default_account_root();
 bool valid_profile_id(std::string_view id);
 bool running_under_same_process_group(pid_t first, pid_t second);
 std::optional<pid_t> running_unmanaged_chatgpt(pid_t managed_process_group);

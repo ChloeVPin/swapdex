@@ -88,7 +88,7 @@ int Service::run() {
     const std::filesystem::path& state_root = paths.state_root;
     const std::filesystem::path& codex_home = paths.codex_home;
     const std::filesystem::path& electron_user_data = paths.electron_user_data;
-    store_.emplace(state_root, codex_home, electron_user_data);
+    store_.emplace(state_root, default_account_root(), codex_home, electron_user_data);
     ensure_private_directory(state_root);
     acquire_singleton_lock();
     store_->initialize();
@@ -130,7 +130,7 @@ int Service::list() {
     const std::filesystem::path& state_root = paths.state_root;
     const std::filesystem::path& codex_home = paths.codex_home;
     const std::filesystem::path& electron_user_data = paths.electron_user_data;
-    store_.emplace(state_root, codex_home, electron_user_data);
+    store_.emplace(state_root, default_account_root(), codex_home, electron_user_data);
     const auto active = store_->active_existing();
     for (const ProfileRecord& record : store_->list_existing()) {
         if (!record.authenticated && !record.email.has_value() && record.label == "New account") {
@@ -162,7 +162,7 @@ int Service::add(std::string label) {
     const std::filesystem::path& state_root = paths.state_root;
     const std::filesystem::path& codex_home = paths.codex_home;
     const std::filesystem::path& electron_user_data = paths.electron_user_data;
-    store_.emplace(state_root, codex_home, electron_user_data);
+    store_.emplace(state_root, default_account_root(), codex_home, electron_user_data);
     ensure_private_directory(state_root);
     acquire_singleton_lock();
     store_->initialize();
