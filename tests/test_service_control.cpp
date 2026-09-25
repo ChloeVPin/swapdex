@@ -106,7 +106,11 @@ void test_service_control() {
     swapdex::test::check(calls.size() > call_count, "Reinstall did not re-enable autostart");
     // A reinstall has to stop the running copy, otherwise an update leaves the old
     // process serving the old binary.
-    swapdex::test::check(has_call_containing(calls, "disable") || backend_id == "windows", "Reinstall did not stop the running install first");
+    // Each backend spells stopping differently: systemd disables, launchd boots the
+    // job out. What matters is that a reinstall asked the service manager to stop.
+    const bool stopped_existing = has_call_containing(calls, "disable") || has_call_containing(calls, "bootout")
+        || has_call_containing(calls, "unload") || has_call_containing(calls, "stop") || backend_id == "windows";
+    swapdex::test::check(stopped_existing, "Reinstall did not stop the running install first");
     control.start();
     control.stop();
     control.status();
@@ -290,9 +294,16 @@ void test_start_reports_the_truth() {
     swapdex::ServiceControl installer(paths, [](const std::vector<std::string>&) { return 0; });
     installer.install(false);
 
-    // The runner prepends the program name, so the verb sits after the flags.
-    auto verb_is = [](const std::vector<std::string>& command, const std::string& verb) {
-        return std::find(command.begin() + 1, command.end(), verb) != command.end();
+    // A query asks the service manager about the service, anything else is a request to
+    // change it. Matching the exact verb would only work for systemd, since launchd
+    // spells the same thing kickstart.
+    auto is_query = [](const std::vector<std::string>& command) {
+        for (const std::string& argument : command) {
+            if (argument == "is-active" || argument == "print" || argument == "status") {
+                return true;
+            }
+        }
+        return false;
     };
 
     {
@@ -308,8 +319,8 @@ void test_start_reports_the_truth() {
     {
         // is-active succeeds once start has been asked for, so this one is honest.
         bool started = false;
-        auto runner = [&started](const std::vector<std::string>& command) {
-            if (std::find(command.begin() + 1, command.end(), "start") != command.end()) {
+        auto runner = [&started, is_query](const std::vector<std::string>& command) {
+            if (!is_query(command)) {
                 started = true;
             }
             return started ? 0 : 1;
@@ -326,9 +337,9 @@ void test_start_reports_the_truth() {
         // A normally launched app blocks the start, and nothing is started behind its back.
         std::vector<std::vector<std::string>> calls;
         bool closed = false;
-        auto runner = [&calls](const std::vector<std::string>& command) {
+        auto runner = [&calls, is_query](const std::vector<std::string>& command) {
             calls.push_back(command);
-            return 1;
+            return is_query(command) ? 1 : 0;
         };
         swapdex::AppProcessProbe probe;
         probe.running_unmanaged = [] { return std::int64_t(4242); };
@@ -338,7 +349,7 @@ void test_start_reports_the_truth() {
         swapdex::test::check(!closed, "The app was closed without being asked to");
         bool start_issued = false;
         for (const auto& call : calls) {
-            if (verb_is(call, "start")) {
+            if (!is_query(call)) {
                 start_issued = true;
             }
         }
@@ -350,9 +361,9 @@ void test_start_reports_the_truth() {
         std::vector<std::vector<std::string>> calls;
         bool started = false;
         bool closed = false;
-        auto runner = [&calls, &started](const std::vector<std::string>& command) {
+        auto runner = [&calls, &started, is_query](const std::vector<std::string>& command) {
             calls.push_back(command);
-            if (std::find(command.begin() + 1, command.end(), "start") != command.end()) {
+            if (!is_query(command)) {
                 started = true;
             }
             return started ? 0 : 1;
@@ -369,8 +380,8 @@ void test_start_reports_the_truth() {
     {
         // An app that refuses to close is reported, not ignored.
         bool started = false;
-        auto runner = [&started](const std::vector<std::string>& command) {
-            if (std::find(command.begin() + 1, command.end(), "start") != command.end()) {
+        auto runner = [&started, is_query](const std::vector<std::string>& command) {
+            if (!is_query(command)) {
                 started = true;
             }
             return started ? 0 : 1;
