@@ -31,22 +31,24 @@
 #endif
 #include <windows.h>
 #include <tlhelp32.h>
-#elif defined(__APPLE__)
-#include <libproc.h>
-#include <sys/proc_info.h>
-#include <sys/sysctl.h>
 #else
+// Linux and macOS share the same base headers. Only the extras differ, so they are
+// added on top rather than replacing the shared set.
 #include <cerrno>
 #include <csignal>
 #include <fcntl.h>
 #include <pwd.h>
-#include <sys/wait.h>
-#if !defined(__APPLE__)
-#include <sys/file.h>
-#endif
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <unistd.h>
+#if defined(__APPLE__)
+#include <libproc.h>
+#include <sys/proc_info.h>
+#include <sys/sysctl.h>
+#else
+#include <sys/file.h>
+#endif
 #endif
 
 namespace swapdex::platform {
