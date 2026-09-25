@@ -54,10 +54,6 @@ std::string format_timestamp(std::int64_t unix_seconds);
 std::optional<std::int64_t> json_optional_integer(const Json& value, std::string_view key);
 std::optional<std::string> json_optional_string(const Json& value, std::string_view key);
 std::string sanitize_label(std::string_view label);
-// Codex creates a control socket inside CODEX_HOME, and a Unix socket path cannot
-// exceed this many bytes.
-constexpr std::size_t unix_socket_path_limit = 107U;
-std::filesystem::path codex_control_socket_path(const std::filesystem::path& account_home);
 // Where per account Codex homes live. Callers must pass this to ProfileStore
 // explicitly so that a store built for a test can never be pointed at the real one.
 std::filesystem::path default_account_root();

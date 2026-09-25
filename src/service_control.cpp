@@ -174,31 +174,6 @@ void ServiceControl::remove_registration(const ServiceBackend& backend) const {
     }
 }
 
-void ServiceControl::remove_legacy_launcher() const {
-#if defined(_WIN32)
-    static_cast<void>(this);
-#else
-    const std::filesystem::path home = home_directory();
-    const std::vector<std::filesystem::path> candidates = {
-        home / ".local" / "share" / "applications" / "swapdex-codex.desktop",
-        home / ".local" / "share" / "swapdex-codex.desktop",
-    };
-    for (const auto& path : candidates) {
-        std::error_code error;
-        if (!path_entry_exists(path) || std::filesystem::is_symlink(path) || !std::filesystem::is_regular_file(path, error) || error) {
-            continue;
-        }
-        const std::string contents = read_file(path, launcher_maximum_bytes);
-        if (contents.find("Swapdex") != std::string::npos && contents.find("swapdex") != std::string::npos) {
-            std::filesystem::remove(path, error);
-            if (error) {
-                throw Error("launcher_cleanup_failed", "Unable to remove the legacy Swapdex launcher");
-            }
-        }
-    }
-#endif
-}
-
 void ServiceControl::remove_installed_file(const std::filesystem::path& path) const {
     if (!path_entry_exists(path)) {
         return;
@@ -236,12 +211,6 @@ int ServiceControl::install(bool start) {
     ensure_private_directory(paths_.manifest_file.parent_path());
     copy_file_atomically(paths_.source_executable, paths_.installed_executable, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write | std::filesystem::perms::owner_exec);
     copy_file_atomically(paths_.source_asset, paths_.installed_asset, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write | std::filesystem::perms::group_read | std::filesystem::perms::others_read);
-    const std::filesystem::path source_skill = paths_.source_asset.parent_path() / "skill" / "SKILL.md";
-    if (regular_file_without_symlink(source_skill)) {
-        const std::filesystem::path installed_skill = paths_.installed_asset.parent_path() / "skill" / "SKILL.md";
-        ensure_private_directory(installed_skill.parent_path());
-        copy_file_atomically(source_skill, installed_skill, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write | std::filesystem::perms::group_read | std::filesystem::perms::others_read);
-    }
     write_registration(*backend);
     const Json manifest = {
         {"version", 1},
@@ -251,7 +220,6 @@ int ServiceControl::install(bool start) {
         {"electron_user_data", paths_.electron_user_data.value_or(default_electron_user_data().string())}
     };
     write_json_file_atomically(paths_.manifest_file, manifest, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write);
-    remove_legacy_launcher();
     if (replacing) {
         try {
             backend->disable();
@@ -313,9 +281,7 @@ int ServiceControl::uninstall(bool purge_data) {
     }
     remove_installed_file(paths_.installed_executable);
     remove_installed_file(paths_.installed_asset);
-    remove_installed_file(paths_.installed_asset.parent_path() / "skill" / "SKILL.md");
     remove_installed_file(paths_.manifest_file);
-    remove_legacy_launcher();
     if (purge_data) {
         // Account homes live outside the state root, so both have to go.
         for (const std::filesystem::path& root : {paths_.state_root, default_account_root()}) {

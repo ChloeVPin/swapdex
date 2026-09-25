@@ -21,14 +21,8 @@ void print_usage() {
               << "  swapdex launch\n"
               << "  swapdex list\n"
               << "  swapdex add [account name]\n"
-              << "  swapdex shell [--list | account] [codex arguments]\n"
               << "  swapdex accounts\n"
-              << "  swapdex usage\n"
-              << "  swapdex whoami\n"
-              << "  swapdex statusline [--apply]\n"
-              << "  swapdex shell-init [--remove]\n"
-              << "  swapdex tui [--no-relaunch]\n"
-              << "  swapdex skill [--remove]\n"
+              << "  swapdex tui\n"
               << "  swapdex version\n"
               << "  swapdex help\n";
 }
@@ -91,29 +85,11 @@ int main(int argc, char** argv) {
             swapdex::Service service(options);
             return service.add(std::move(label));
         }
-        if (command == "shell" && arguments.size() >= 1) {
-            return swapdex::shell_command(std::vector<std::string>(arguments.begin() + 1, arguments.end()));
-        }
         if (command == "accounts" && arguments.size() == 1) {
             return swapdex::accounts_command();
         }
-        if (command == "skill" && (arguments.size() == 1 || (arguments.size() == 2 && arguments[1] == "--remove"))) {
-            return swapdex::skill_command(std::vector<std::string>(arguments.begin() + 1, arguments.end()));
-        }
-        if (command == "usage" && arguments.size() == 1) {
-            return swapdex::usage_command();
-        }
-        if (command == "whoami" && arguments.size() == 1) {
-            return swapdex::whoami_command();
-        }
-        if (command == "tui" && (arguments.size() == 1 || (arguments.size() == 2 && arguments[1] == "--no-relaunch"))) {
-            return swapdex::tui_command(std::vector<std::string>(arguments.begin() + 1, arguments.end()));
-        }
-        if (command == "statusline" && (arguments.size() == 1 || (arguments.size() == 2 && arguments[1] == "--apply"))) {
-            return swapdex::statusline_command(std::vector<std::string>(arguments.begin() + 1, arguments.end()));
-        }
-        if (command == "shell-init" && (arguments.size() == 1 || (arguments.size() == 2 && arguments[1] == "--remove"))) {
-            return swapdex::shell_init_command(std::vector<std::string>(arguments.begin() + 1, arguments.end()));
+        if (command == "tui" && arguments.size() == 1) {
+            return swapdex::tui_command();
         }
         if (command == "version" && arguments.size() == 1) {
             std::cout << SWAPDEX_VERSION << "\n";

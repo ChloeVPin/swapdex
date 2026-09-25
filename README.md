@@ -27,71 +27,25 @@ the profile menu you never use, while Add account and Settings always stay visib
 account is deleted with its stored credentials and Codex keeps running. Removing the
 account you are signed in with signs you out and clears its credentials.
 
-**Where account data lives.** Each account gets its own short folder in
-`~/.swapdex-accounts`. That location is deliberate: Codex keeps a control socket inside
-`CODEX_HOME`, and a Unix socket path cannot be long, so a deeply nested data directory
-would stop Codex from starting at all.
-
-**The same accounts in your terminal.** Swapdex stores credentials per account, so the
-Codex command line tool can use any of them too:
-
-```sh
-swapdex shell --list                  # accounts you can run
-swapdex shell work                    # start Codex as the work account
-swapdex usage                         # limits and credits for the signed in account
-swapdex whoami                        # who the terminal is set to
-```
-
-`swapdex shell` hands the rest of the command straight to Codex, so the usual flags
-still work. Each account keeps its own session history, because the CLI stores that
-under the account it was started with.
-
-To have plain `codex` follow the account signed in to the app, run this once:
-
-```sh
-swapdex shell-init
-```
-
-It adds a small wrapper to your shell startup file and never touches anything else in
-it. Bypass it for a single command with `SWAPDEX_FOLLOW=0 codex`, or remove it with
-`swapdex shell-init --remove`.
-
-**`/swapdex` inside Codex.** Install the skill once:
-
-```sh
-swapdex skill
-```
-
-Codex reads skills from `$CODEX_HOME/skills`, and Swapdex points that at the active
-account, so `swapdex skill` writes the skill into every account you have plus the shared
-home. Then start a new session and type `/swapdex` or `$swapdex` and it tells you which account
-you are on, lists the others with their plans and limits, and points you at the
-picker. Remove it later with `swapdex skill --remove`.
-
-Switching itself has to happen in a terminal, and that is a Codex limit rather than a
-choice. Nothing a third party installs can take the terminal over from inside a live
-Codex session: the status line is fixed built in items, skills are instructions the
-model reads rather than programs it runs, and hooks fire on model lifecycle events.
-So `/swapdex` can show you your accounts, and the menu below does the switching.
-
-**A menu in the terminal.** For a visual picker instead of commands:
+**A menu in your terminal.** One command opens the same switcher as a keyboard driven
+picker, without the app:
 
 ```sh
 swapdex tui
 ```
 
-It draws your accounts with plan and limits, and you press one to switch. Swapdex asks
-the running service to do the swap so there is only ever one writer of your
-credentials, waits for it to finish, and then starts Codex on the same screen as that
-account, so it feels like the terminal just became the other account. `a` adds an
-account, `r` removes one behind a confirmation, and `q` leaves without changing
-anything. Add `--no-relaunch` if you would rather go back to your shell.
+Use the arrow keys, press Enter on the account you want, and Swapdex switches the app
+and your terminal to it. `a` signs a new account in, `r` removes one, `q` leaves.
 
-**Limits inside the terminal.** Codex draws its own status line, and Swapdex never
-renders into it. But because the CLI is authenticated as whichever account you picked,
-Codex's built in rate limit items show that account's real limits. To turn them on, run
-`/statusline` inside Codex, or let Swapdex add them for you with
-`swapdex statusline --apply`, which keeps a backup of your config.
+**One account at a time, shared everywhere.** Swapdex stores credentials per account,
+but the account you pick in the app or in `swapdex tui` is the one Codex uses. The
+app and the Codex command line tool share the same home, so whichever you open next
+starts on the account you chose. There is nothing to configure and no wrapper in your
+shell.
+
+**Where account data lives.** Each account gets its own folder in `~/.swapdex-accounts`,
+holding only that account's credentials. The account you pick is copied into the shared
+Codex home, which is what the app and the command line tool both read.
 
 ## Install
 
@@ -129,15 +83,8 @@ To reinstall a newer version later, run the same line again.
 | `swapdex status` | Check whether Swapdex is installed and running. |
 | `swapdex uninstall` | Remove Swapdex and keep your accounts. |
 | `swapdex uninstall --purge-data` | Remove Swapdex and delete stored account data. |
-| `swapdex shell [account]` | Start the Codex command line tool as that account. |
-| `swapdex shell --list` | List accounts the terminal can use. |
-| `swapdex usage` | Show limits and credits for the signed in account. |
-| `swapdex whoami` | Show which account the terminal would use. |
-| `swapdex shell-init` | Make plain `codex` follow the app account. |
-| `swapdex statusline` | Explain and optionally enable the rate limit items. |
 | `swapdex tui` | Open the interactive account picker. |
 | `swapdex accounts` | List accounts and limits, read only. |
-| `swapdex skill` | Install or remove the Codex `/swapdex` skill. |
 
 None of these touch Codex itself.
 

@@ -51,7 +51,6 @@ private:
     ServiceRuntime runtime() const;
     void write_registration(const ServiceBackend& backend) const;
     void remove_registration(const ServiceBackend& backend) const;
-    void remove_legacy_launcher() const;
     void remove_installed_file(const std::filesystem::path& path) const;
     void validate_sources() const;
 

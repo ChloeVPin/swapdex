@@ -25,6 +25,7 @@ std::filesystem::path data_directory();
 std::filesystem::path config_directory();
 std::filesystem::path cache_directory();
 std::filesystem::path runtime_directory();
+std::filesystem::path executable_path();
 std::filesystem::path executable_directory();
 std::filesystem::path default_codex_home();
 std::filesystem::path default_electron_user_data();
@@ -37,7 +38,6 @@ bool matches_chatgpt_binary(const std::filesystem::path& path);
 std::filesystem::path chatgpt_executable_name();
 // The Codex command line binary, preferring whatever the user already has on PATH so
 // terminal sessions match the version they normally use.
-std::filesystem::path codex_cli_binary();
 
 // Process discovery, used to refuse starting while a second Codex is already running.
 std::optional<std::int64_t> running_unmanaged_chatgpt(std::int64_t managed_process_group);

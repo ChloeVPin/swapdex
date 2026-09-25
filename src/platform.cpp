@@ -18,6 +18,10 @@
 #include <termios.h>
 #endif
 
+#if defined(__APPLE__)
+#include <mach-o/dyld.h>
+#endif
+
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -119,23 +123,6 @@ std::optional<std::string> first_existing(const std::vector<std::filesystem::pat
 }
 
 #endif
-
-std::vector<std::filesystem::path> value_separator_split(const std::string& value, const std::filesystem::path& separator) {
-    std::vector<std::filesystem::path> parts;
-    std::size_t start = 0;
-    while (start <= value.size()) {
-        const std::size_t end = value.find(separator.string(), start);
-        const std::string piece = value.substr(start, end == std::string::npos ? std::string::npos : end - start);
-        if (!piece.empty()) {
-            parts.push_back(from_native(piece));
-        }
-        if (end == std::string::npos) {
-            break;
-        }
-        start = end + separator.string().size();
-    }
-    return parts;
-}
 
 std::vector<std::string> allowed_child_variables() {
     return {
@@ -293,24 +280,43 @@ std::filesystem::path runtime_directory() {
 #endif
 }
 
-std::filesystem::path executable_directory() {
+std::filesystem::path executable_path() {
 #if defined(_WIN32)
     wchar_t buffer[MAX_PATH] = {0};
     const DWORD length = GetModuleFileNameW(nullptr, buffer, MAX_PATH);
     if (length > 0 && length < MAX_PATH) {
-        return std::filesystem::path(std::wstring(buffer, length)).parent_path();
+        return std::filesystem::path(std::wstring(buffer, length));
     }
-    return std::filesystem::current_path();
+#elif defined(__APPLE__)
+    std::error_code error;
+    const fs::path resolved = fs::read_symlink("/proc/self/exe", error);
+    if (!error && !resolved.empty()) {
+        return resolved;
+    }
+    uint32_t size = 0;
+    _NSGetExecutablePath(nullptr, &size);
+    if (size > 0) {
+        std::string buffer(size, '\0');
+        if (_NSGetExecutablePath(buffer.data(), &size) == 0) {
+            std::error_code resolve_error;
+            const fs::path canonical = fs::canonical(fs::path(buffer.c_str()), resolve_error);
+            return resolve_error ? fs::path(buffer.c_str()) : canonical;
+        }
+    }
 #else
     const std::string link = read_link("/proc/self/exe");
     if (!link.empty()) {
-        return std::filesystem::path(link).parent_path();
+        return std::filesystem::path(link);
     }
-    if (const auto value = environment("HOME"); value.has_value()) {
-        return home_directory() / ".local" / "bin";
-    }
-    return std::filesystem::current_path();
 #endif
+    if (const auto value = environment("HOME"); value.has_value()) {
+        return home_directory() / ".local" / "bin" / "swapdex";
+    }
+    return std::filesystem::current_path() / "swapdex";
+}
+
+std::filesystem::path executable_directory() {
+    return executable_path().parent_path();
 }
 
 std::filesystem::path default_codex_home() {
@@ -598,34 +604,6 @@ int run_command(const std::vector<std::string>& arguments, const EnvironmentOver
     }
     return 1;
 #endif
-}
-
-std::filesystem::path codex_cli_binary() {
-    const std::optional<std::string> path_value = environment("PATH");
-    if (path_value.has_value()) {
-        const std::filesystem::path directory_separator =
-#if defined(_WIN32)
-            std::filesystem::path(";");
-#else
-            std::filesystem::path(":");
-#endif
-        const std::vector<std::filesystem::path> search = value_separator_split(*path_value, directory_separator);
-#if defined(_WIN32)
-        const std::filesystem::path leaf = "codex.exe";
-#elif defined(__APPLE__)
-        const std::filesystem::path leaf = "codex";
-#else
-        const std::filesystem::path leaf = "codex";
-#endif
-        for (const auto& directory : search) {
-            const std::filesystem::path candidate = directory / leaf;
-            std::error_code error;
-            if (std::filesystem::is_regular_file(candidate, error) && !error) {
-                return candidate;
-            }
-        }
-    }
-    return from_native(SWAPDEX_CODEX_BINARY);
 }
 
 bool spawn_detached(const std::vector<std::string>& arguments) {

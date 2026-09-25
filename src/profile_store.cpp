@@ -192,11 +192,6 @@ void ProfileStore::initialize() {
     migrate_account_homes_locked();
     prune_pending_placeholders_locked();
     prune_orphan_profiles_locked();
-    for (const ProfileRecord& record : registry_.profiles) {
-        if (codex_control_socket_path(account_root_ / record.id).string().size() >= unix_socket_path_limit) {
-            throw Error("account_home_too_long", "The account storage path is too long for Codex to start. Move your home directory or set XDG_DATA_HOME to a shorter path.");
-        }
-    }
     if (registry_.profiles.empty() && regular_file_exists(shared_codex_home_ / "auth.json")) {
         ProfileRecord record;
         record.id = "current-" + random_identifier(6);

@@ -140,27 +140,9 @@ void report(const std::string& text) {
     std::fflush(stdout);
 }
 
-int relaunch_cli(const std::string& id) {
-    const Loaded loaded = load();
-    if (!loaded.runtime.has_value()) {
-        report("Swapdex is not installed.");
-        return 1;
-    }
-    ProfileStore store(loaded.runtime->state_root, default_account_root(), loaded.runtime->codex_home, loaded.runtime->electron_user_data);
-    const std::filesystem::path home = store.profile_home(id);
-    const std::filesystem::path cli = platform::codex_cli_binary();
-    if (cli.empty() || !std::filesystem::is_regular_file(cli)) {
-        report("The Codex command line tool was not found on this machine.");
-        return 1;
-    }
-    report("Starting Codex as that account. To come back here, run swapdex tui again.");
-    return platform::run_command({platform::to_native(cli)}, {{"CODEX_HOME", home.string()}});
 }
 
-}
-
-int tui_command(const std::vector<std::string>& arguments) {
-    const bool relaunch = std::find(arguments.begin(), arguments.end(), "--no-relaunch") == arguments.end();
+int tui_command() {
     Loaded loaded = load();
     if (!loaded.runtime.has_value()) {
         report("Swapdex is not installed. Run the install command first.");
@@ -192,8 +174,8 @@ int tui_command(const std::vector<std::string>& arguments) {
             }
         } else if (key == "a") {
             platform::leave_alternate_screen();
-            report("Opening the account sign in flow. Finish it, then run swapdex tui again.");
-            result = shell_command({"add"});
+            report("Opening the account sign in flow. Finish it in the browser, then run swapdex tui again.");
+            result = platform::run_command({platform::to_native(platform::executable_path()), "add"});
             return result;
         } else if (key == "r") {
             if (loaded.profiles.size() <= 1U) {
@@ -245,9 +227,7 @@ int tui_command(const std::vector<std::string>& arguments) {
     }
 
     platform::leave_alternate_screen();
-    if (relaunch && loaded.active.has_value()) {
-        return relaunch_cli(loaded.active->id);
-    }
+
     return result;
 }
 
