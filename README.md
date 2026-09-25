@@ -27,21 +27,10 @@ the profile menu you never use, while Add account and Settings always stay visib
 account is deleted with its stored credentials and Codex keeps running. Removing the
 account you are signed in with signs you out and clears its credentials.
 
-**A menu in your terminal.** One command opens the same switcher as a keyboard driven
-picker, without the app:
-
-```sh
-swapdex tui
-```
-
-Use the arrow keys, press Enter on the account you want, and Swapdex switches the app
-and your terminal to it. `a` signs a new account in, `r` removes one, `q` leaves.
-
 **One account at a time, shared everywhere.** Swapdex stores credentials per account,
-but the account you pick in the app or in `swapdex tui` is the one Codex uses. The
-app and the Codex command line tool share the same home, so whichever you open next
-starts on the account you chose. There is nothing to configure and no wrapper in your
-shell.
+but the account you pick in the app is the one Codex uses. The app and the Codex
+command line tool share the same home, so whichever you open next starts on the account
+you chose. There is nothing to configure and no wrapper in your shell.
 
 **Where account data lives.** Each account gets its own folder in `~/.swapdex-accounts`,
 holding only that account's credentials. The account you pick is copied into the shared
@@ -83,8 +72,7 @@ To reinstall a newer version later, run the same line again.
 | `swapdex status` | Check whether Swapdex is installed and running. |
 | `swapdex uninstall` | Remove Swapdex and keep your accounts. |
 | `swapdex uninstall --purge-data` | Remove Swapdex and delete stored account data. |
-| `swapdex tui` | Open the interactive account picker. |
-| `swapdex accounts` | List accounts and limits, read only. |
+| `swapdex accounts` | List accounts and limits in the terminal, read only. |
 
 None of these touch Codex itself.
 
@@ -165,7 +153,7 @@ cmake --build build --target swapdex_live_probe
 ## Project layout
 
 ```
-src/            the service, account store, platform layer, and CLI
+src/            the service, account store, platform layer, and commands
 
 assets/         the interface that is injected into Codex
 tests/          unit tests and the live interface probe

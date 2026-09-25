@@ -71,28 +71,8 @@ int run_command(const std::vector<std::string>& arguments);
 int run_command(const std::vector<std::string>& arguments, const EnvironmentOverrides& overrides);
 bool spawn_detached(const std::vector<std::string>& arguments);
 
-// Terminal control for the interactive picker.
-class RawTerminal {
-public:
-    RawTerminal();
-    RawTerminal(const RawTerminal&) = delete;
-    RawTerminal& operator=(const RawTerminal&) = delete;
-    ~RawTerminal();
+;
 
-    bool active() const noexcept { return active_; }
-    // Reads one key press. Arrow keys arrive as escape sequences, which are reported
-    // as "up", "down", "left", "right", "enter" or "escape".
-    std::string read_key(int timeout_milliseconds);
-
-private:
-    bool active_ = false;
-    bool restored_ = false;
-    void* saved_ = nullptr;
-};
-
-void enter_alternate_screen();
-void leave_alternate_screen();
-void write_styled(const std::string& text);
 
 // Registry access, only meaningful on Windows. Exposed so the service backend and the
 // tests can share one implementation.

@@ -5,7 +5,6 @@
 
 #include "service.hpp"
 #include "shell.hpp"
-#include "tui.hpp"
 #include "service_control.hpp"
 #include "util.hpp"
 
@@ -22,7 +21,6 @@ void print_usage() {
               << "  swapdex list\n"
               << "  swapdex add [account name]\n"
               << "  swapdex accounts\n"
-              << "  swapdex tui\n"
               << "  swapdex version\n"
               << "  swapdex help\n";
 }
@@ -87,9 +85,6 @@ int main(int argc, char** argv) {
         }
         if (command == "accounts" && arguments.size() == 1) {
             return swapdex::accounts_command();
-        }
-        if (command == "tui" && arguments.size() == 1) {
-            return swapdex::tui_command();
         }
         if (command == "version" && arguments.size() == 1) {
             std::cout << SWAPDEX_VERSION << "\n";
