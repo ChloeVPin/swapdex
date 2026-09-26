@@ -241,9 +241,32 @@ int ServiceControl::install(bool start) {
     }
     backend->enable(start);
     std::cout << "Swapdex installed using " << backend->id() << ".\n";
-    if (start) {
-        std::cout << "Swapdex will start with Codex.\n";
+    if (!start) {
+        return 0;
     }
+    // An install replaces a running copy, so the old job is booted out and the new one
+    // loaded. That handover is not atomic, and a load issued too soon after a bootout
+    // can leave nothing loaded at all. Confirm it came up, and retry the load once
+    // before giving up, rather than reporting an install that is not running.
+    for (int attempt = 0; attempt < 100 && !backend->active(); ++attempt) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    if (!backend->active()) {
+        std::cout << "Retrying the service registration.\n";
+        try {
+            static_cast<void>(backend->enable(true));
+        } catch (const std::exception&) {
+        }
+        for (int attempt = 0; attempt < 100 && !backend->active(); ++attempt) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+    }
+    if (!backend->active()) {
+        std::cerr << "swapdex: the files are installed but the service did not start.\n";
+        std::cerr << "Run swapdex status for details, then swapdex start.\n";
+        return 1;
+    }
+    std::cout << "Swapdex will start with Codex.\n";
     return 0;
 }
 
