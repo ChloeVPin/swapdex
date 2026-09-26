@@ -582,24 +582,67 @@
     });
   };
 
-  // Reads the colour the app actually paints the top bar with, before any of our own
-  // rules are in effect, and offers it back as a custom property. A theme can change
-  // at any time, so this is re-read whenever the background is applied.
+  // Picks the colour for the top bar. The bar's own colour can be translucent, in
+  // which case using it as-is lets the picture tint through, so it is composited over
+  // the app's opaque base surface instead. Everything is read from the running app:
+  // guessing a system colour matched neither theme.
+  const parseColour = value => {
+    const parts = String(value || "").match(/[\d.]+/g);
+    if (!parts || parts.length < 3) {
+      return null;
+    }
+    return {
+      r: Number(parts[0]),
+      g: Number(parts[1]),
+      b: Number(parts[2]),
+      a: parts.length > 3 ? Number(parts[3]) : 1
+    };
+  };
+
+  const over = (top, bottom) => {
+    const alpha = top.a + bottom.a * (1 - top.a);
+    if (alpha <= 0) {
+      return "rgba(0, 0, 0, 0)";
+    }
+    const mix = channel => Math.round((top[channel] * top.a + bottom[channel] * bottom.a * (1 - top.a)) / alpha);
+    return "rgba(" + mix("r") + ", " + mix("g") + ", " + mix("b") + ", " + Math.round(alpha * 1000) / 1000 + ")";
+  };
+
   const rememberToolbarSurface = () => {
     const toolbar = chatToolbarCache;
     if (!(toolbar instanceof HTMLElement) || !toolbar.isConnected) {
       return;
     }
-    let colour = "";
+    let surface = "transparent";
     try {
-      colour = getComputedStyle(toolbar).backgroundColor;
+      const top = parseColour(getComputedStyle(toolbar).backgroundColor);
+      if (top === null) {
+        return;
+      }
+      if (top.a >= 1) {
+        surface = getComputedStyle(toolbar).backgroundColor;
+      } else {
+        // Composite over whatever the app itself paints behind the bar.
+        let base = null;
+        for (const candidate of [document.querySelector("main"), document.body, document.documentElement]) {
+          if (!(candidate instanceof HTMLElement)) {
+            continue;
+          }
+          const parsed = parseColour(getComputedStyle(candidate).backgroundColor);
+          if (parsed !== null && parsed.a > 0) {
+            base = parsed;
+            break;
+          }
+        }
+        if (base === null) {
+          return;
+        }
+        surface = over(top, base);
+      }
     } catch {
       return;
     }
-    // Fully transparent means the app intends to show whatever is behind it, which is
-    // its own window background and not our picture, so nothing needs forcing.
-    const opaque = colour && colour !== "transparent" && !/rgba\(\s*0\s*,\s*0\s*,\s*0\s*,\s*0\s*\)/.test(colour);
-    document.documentElement.style.setProperty("--swapdex-toolbar-surface", opaque ? colour : "transparent");
+    document.documentElement.style.setProperty("--swapdex-toolbar-surface", surface);
   };
 
   const paintChatBackground = () => {
