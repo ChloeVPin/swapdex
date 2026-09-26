@@ -429,9 +429,6 @@
   // selector, the surfaces are found by what they are: the main regions that fill the
   // window to their edges. Anything not matched is left alone, so a future app version
   // degrades to a plain background rather than a broken one.
-  const chatBackgroundLayerId = "swapdex-chat-background";
-  const composerScrimId = "swapdex-composer-scrim";
-
   // This script also runs before the document exists, as a hook for every new document,
   // so anything that touches the head or the body has to wait for one. Reaching for them
   // early threw, which aborted the whole script and left the app with no integration.
@@ -457,69 +454,58 @@
     }
     const style = document.createElement("style");
     style.id = "swapdex-chat-background-style";
+    // The picture is painted as the background of the document itself, never as an
+    // overlay element. An earlier version used a fixed layer with a z-index, which
+    // paints above the app's in-flow content and covered the entire interface. A
+    // background cannot do that, because content always paints over its own page.
+    //
+    // The bottom fade is part of that same background rather than a blurred overlay,
+    // for the same reason: it guarantees the composer stays readable over any picture
+    // without anything sitting on top of the app that could take a click.
     style.textContent = `
-      #${chatBackgroundLayerId} {
-        position: fixed;
-        inset: 0;
-        z-index: 0;
-        pointer-events: none;
-        background-position: center;
-        background-size: cover;
-        background-repeat: no-repeat;
-        display: none;
+      html[data-swapdex-chat-background="on"] body {
+        background-repeat: no-repeat, no-repeat, no-repeat !important;
+        background-size: cover, cover, cover !important;
+        background-position: center bottom, center center, center center !important;
+        background-attachment: fixed, fixed, fixed !important;
       }
-      html[data-swapdex-chat-background="on"] #${chatBackgroundLayerId} { display: block; }
-      /* A wash over the image so light text stays readable whatever the picture is. */
-      html[data-swapdex-chat-background="on"] #${chatBackgroundLayerId}::after {
-        content: "";
-        position: absolute;
-        inset: 0;
-        background: rgba(0, 0, 0, 0.35);
-      }
-      #${composerScrimId} {
-        position: fixed;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        height: 260px;
-        z-index: 1;
-        pointer-events: none;
-        display: none;
-        -webkit-backdrop-filter: blur(18px) saturate(140%);
-        backdrop-filter: blur(18px) saturate(140%);
-        -webkit-mask-image: linear-gradient(to top, #000 0%, #000 34%, rgba(0,0,0,0.55) 62%, transparent 100%);
-        mask-image: linear-gradient(to top, #000 0%, #000 34%, rgba(0,0,0,0.55) 62%, transparent 100%);
-      }
-      html[data-swapdex-composer-scrim="on"] #${composerScrimId} { display: block; }
-      /* Exactly one element gives up its background: the column the messages live in.
-         An earlier version of this reached for the document, the app root, every child
-         of the pane and every fixed wrapper, and removed background images from all of
-         them. That broke the app, so the rule is now deliberately narrow. Only the
-         colour is touched, never background-image, so nothing that draws with an image
-         loses it. */
+      /* Only colour is given up, and only on the few containers that paint the app
+         background. Background images are never touched, so nothing that draws with an
+         image loses it. */
+      html[data-swapdex-chat-background="on"] #root,
+      html[data-swapdex-chat-background="on"] main,
       html[data-swapdex-chat-background="on"] [data-swapdex-chat-content="true"] {
         background-color: transparent !important;
       }
       /* The sidebar keeps its own background so it stays readable over any picture. */
       html[data-swapdex-chat-background="on"] nav.sidebar-navigation,
       html[data-swapdex-chat-background="on"] nav[aria-label] {
-        background-color: color-mix(in srgb, currentColor 7%, rgba(0, 0, 0, 0.55)) !important;
-        backdrop-filter: blur(10px);
+        background-color: color-mix(in srgb, currentColor 8%, rgba(0, 0, 0, 0.6)) !important;
       }
       /* Message bubbles keep their own background so text stays readable. */
       html[data-swapdex-chat-background="on"] [data-swapdex-chat-bubble] {
         background-color: rgba(0, 0, 0, 0.55) !important;
-        backdrop-filter: blur(6px);
       }
     `;
     document.head.append(style);
   };
 
-  // Marks the surfaces that sit between the image and the text, so they can be made
-  // transparent. This walks down from the top of the document and stops as soon as it
-  // has found the chat pane. Scanning every element and measuring it forces a layout
-  // per element, which on the real app took long enough to time out the injection
-  // entirely, so the walk is bounded and the answer is cached.
+  // The three layers of the page background, bottom first: a fade that keeps the
+  // composer readable, a wash so light text works over any picture, then the image.
+  const pageBackgroundLayers = dataUrl => {
+    if (!dataUrl) {
+      return "none";
+    }
+    const wash = "linear-gradient(rgba(0, 0, 0, 0.28), rgba(0, 0, 0, 0.28))";
+    if (!composerScrim) {
+      return wash + ", url(\"" + dataUrl + "\")";
+    }
+    // Sits at the bottom of the page background, behind everything, and is what keeps
+    // the message box readable over any picture.
+    const fade = "linear-gradient(to top, rgba(0, 0, 0, 0.92) 0px, rgba(0, 0, 0, 0.72) 90px, rgba(0, 0, 0, 0.25) 200px, rgba(0, 0, 0, 0) 300px)";
+    return fade + ", " + wash + ", url(\"" + dataUrl + "\")";
+  };
+
   // One element only: the column the messages live in, which is the sibling of the
   // toolbar inside the app's main region. Marking more than this is what broke the app,
   // because the earlier version marked the document, the app root, the fixed wrapper
@@ -572,33 +558,21 @@
   const paintChatBackground = () => {
     installChatBackgroundStyles();
     const root = document.documentElement;
-    root.setAttribute("data-swapdex-chat-background", chatBackgroundEnabled && chatBackgroundDataUrl ? "on" : "off");
-    root.setAttribute("data-swapdex-composer-scrim", composerScrim ? "on" : "off");
-    let layer = document.getElementById(chatBackgroundLayerId);
-    if (!layer) {
-      layer = document.createElement("div");
-      layer.id = chatBackgroundLayerId;
-      layer.setAttribute("aria-hidden", "true");
-      document.body.append(layer);
-    }
-    if (chatBackgroundDataUrl && layer.style.backgroundImage !== 'url("' + chatBackgroundDataUrl + '")') {
-      layer.style.backgroundImage = 'url("' + chatBackgroundDataUrl + '")';
-    }
-    if (!chatBackgroundDataUrl) {
-      layer.style.backgroundImage = "";
-    }
+    const wanted = chatBackgroundEnabled && chatBackgroundDataUrl ? "on" : "off";
+    root.setAttribute("data-swapdex-chat-background", wanted);
     markChatSurfaces();
     chatBackgroundApplied = true;
-    // Say whether it actually painted. Whether a background shows is otherwise
-    // invisible from the service, and it is the first question anyone asks.
     try {
-      const painted = layer.style.backgroundImage !== "" && getComputedStyle(layer).display !== "none";
-      const visible = painted ? getComputedStyle(layer).backgroundImage !== "none" : false;
+      const background = wanted === "on" ? pageBackgroundLayers(chatBackgroundDataUrl) : "none";
+      if (document.body.style.backgroundImage !== background) {
+        document.body.style.backgroundImage = background;
+      }
+      const painted = wanted === "on" && getComputedStyle(document.body).backgroundImage !== "none";
       const count = chatContentCache !== null && chatContentCache.isConnected ? 1 : 0;
       // Report whether it painted. Whether a background shows is otherwise invisible
       // from the service, and it is the first question anyone asks. Reported once per
       // distinct outcome so it does not repeat on every pass.
-      const report = (visible ? "painted" : (painted ? "hidden by the app" : "not set")) + ":" + String(count);
+      const report = (painted ? "painted" : (wanted === "on" ? "hidden by the app" : "not set")) + ":" + String(count);
       if (report === lastBackgroundReport) {
         return;
       }
@@ -607,11 +581,11 @@
         v: 1,
         source: "profile-dropdown",
         action: "chat-background-status",
-        applied: visible ? "painted" : (painted ? "hidden by the app" : "not set"),
+        applied: painted ? "painted" : (wanted === "on" ? "hidden by the app" : "not set"),
         surfaces: String(count)
       });
     } catch (error) {
-      reportRendererFailure("chat background status", error);
+      reportRendererFailure("chat background", error);
     }
   };
 
