@@ -946,8 +946,6 @@ std::string Service::injection_source() const {
     throw Error("injection_asset_missing", "The Swapdex renderer integration is missing");
 }
 
-namespace {
-
 // Every page the app owns, whatever its path. The main window and the settings window
 // are separate targets, and requiring exactly one match meant only the main window was
 // ever injected, so the whole settings section was missing on macOS.
@@ -975,8 +973,6 @@ std::vector<std::string> app_page_target_ids(const nlohmann::json& targets) {
         ids.push_back(target.at("targetId").get<std::string>());
     }
     return ids;
-}
-
 }
 
 std::vector<std::string> Service::find_targets(const nlohmann::json& targets) const {

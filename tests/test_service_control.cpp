@@ -466,3 +466,41 @@ void test_shutdown_channel_is_interruptible() {
     ::close(descriptors[0]);
     ::close(descriptors[1]);
 }
+
+void test_every_app_window_is_a_target() {
+    // The settings window is a separate page target. Requiring a single match on one
+    // exact url meant it was never injected, which is why the whole settings section was
+    // missing on macOS: account removal, the privacy blur and the menu settings.
+    nlohmann::json targets = nlohmann::json::object();
+    targets["targetInfos"] = nlohmann::json::array();
+    auto add = [&targets](const std::string& type, const std::string& url, bool attached) {
+        nlohmann::json item = nlohmann::json::object();
+        item["type"] = type;
+        item["url"] = url;
+        item["targetId"] = "id-" + url;
+        item["attached"] = attached;
+        targets["targetInfos"].push_back(item);
+    };
+    add("page", "app://-/index.html", false);
+    add("page", "app://-/settings.html", false);
+    add("page", "app://-/index.html?window=2", false);
+    add("page", "app://-/index.html", true);
+    add("worker", "app://-/worker.js", false);
+    add("page", "https://example.invalid/", false);
+
+    const std::vector<std::string> ids = swapdex::app_page_target_ids(targets);
+    swapdex::test::check(ids.size() == 3U, "Not every app window was recognised as a target");
+    bool has_settings = false;
+    for (const std::string& id : ids) {
+        if (id == "id-app://-/settings.html") {
+            has_settings = true;
+        }
+    }
+    swapdex::test::check(has_settings, "The settings window was not recognised as an app target");
+    for (const std::string& id : ids) {
+        if (id.find("worker") != std::string::npos || id.find("example.invalid") != std::string::npos) {
+            throw swapdex::test::Failure("A target that is not an app page was selected: " + id);
+        }
+    }
+    swapdex::test::check(swapdex::app_page_target_ids(nlohmann::json::object()).empty(), "Targets were invented from an empty response");
+}

@@ -19,7 +19,12 @@
 
 namespace swapdex {
 
+// Every app page target, whatever its path. Exposed so the rule can be tested: the
+// settings window is a separate target and used to be excluded.
+std::vector<std::string> app_page_target_ids(const nlohmann::json& targets);
+
 namespace service_detail {
+
 
 constexpr bool should_run_maintenance(bool first_cycle, bool request_pending, bool enabled) {
     return request_pending || (first_cycle && enabled);
