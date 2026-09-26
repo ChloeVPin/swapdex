@@ -454,33 +454,24 @@
     }
     const style = document.createElement("style");
     style.id = "swapdex-chat-background-style";
-    // The picture is painted as the background of the document itself, never as an
-    // overlay element. An earlier version used a fixed layer with a z-index, which
-    // paints above the app's in-flow content and covered the entire interface. A
-    // background cannot do that, because content always paints over its own page.
+    // The picture is painted as the background of the chat column itself, so the browser
+    // clips it to that box and it cannot reach the sidebar or the toolbar above. Painting
+    // it on the document instead filled the whole page, and painting it on a fixed layer
+    // covered the interface outright, so the element's own background is the only place
+    // it can live that is both scoped and incapable of covering anything.
     //
-    // The bottom fade is part of that same background rather than a blurred overlay,
-    // for the same reason: it guarantees the composer stays readable over any picture
-    // without anything sitting on top of the app that could take a click.
+    // Only colour is given up here, and only one level inside the column, so anything
+    // that scrolls or draws with an image keeps it.
     style.textContent = `
-      html[data-swapdex-chat-background="on"] body {
+      html[data-swapdex-chat-background="on"] [data-swapdex-chat-content="true"] {
+        background-color: transparent !important;
         background-repeat: no-repeat, no-repeat, no-repeat !important;
         background-size: cover, cover, cover !important;
         background-position: center bottom, center center, center center !important;
-        background-attachment: fixed, fixed, fixed !important;
+        background-attachment: local, local, local !important;
       }
-      /* Only colour is given up, and only on the few containers that paint the app
-         background. Background images are never touched, so nothing that draws with an
-         image loses it. */
-      html[data-swapdex-chat-background="on"] #root,
-      html[data-swapdex-chat-background="on"] main,
-      html[data-swapdex-chat-background="on"] [data-swapdex-chat-content="true"] {
+      html[data-swapdex-chat-background="on"] [data-swapdex-chat-content="true"] > div {
         background-color: transparent !important;
-      }
-      /* The sidebar keeps its own background so it stays readable over any picture. */
-      html[data-swapdex-chat-background="on"] nav.sidebar-navigation,
-      html[data-swapdex-chat-background="on"] nav[aria-label] {
-        background-color: color-mix(in srgb, currentColor 8%, rgba(0, 0, 0, 0.6)) !important;
       }
       /* Message bubbles keep their own background so text stays readable. */
       html[data-swapdex-chat-background="on"] [data-swapdex-chat-bubble] {
@@ -563,11 +554,12 @@
     markChatSurfaces();
     chatBackgroundApplied = true;
     try {
-      const background = wanted === "on" ? pageBackgroundLayers(chatBackgroundDataUrl) : "none";
-      if (document.body.style.backgroundImage !== background) {
-        document.body.style.backgroundImage = background;
+      const target = chatContentCache;
+      const background = wanted === "on" && target !== null ? pageBackgroundLayers(chatBackgroundDataUrl) : "none";
+      if (target !== null && target.style.backgroundImage !== background) {
+        target.style.backgroundImage = background;
       }
-      const painted = wanted === "on" && getComputedStyle(document.body).backgroundImage !== "none";
+      const painted = wanted === "on" && target !== null && getComputedStyle(target).backgroundImage !== "none";
       const count = chatContentCache !== null && chatContentCache.isConnected ? 1 : 0;
       // Report whether it painted. Whether a background shows is otherwise invisible
       // from the service, and it is the first question anyone asks. Reported once per
