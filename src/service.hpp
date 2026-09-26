@@ -25,10 +25,6 @@ std::vector<std::string> app_page_target_ids(const nlohmann::json& targets);
 
 namespace service_detail {
 
-// Which content type an image path claims, or nothing if it is not a type a browser
-// paints. Exposed so the rule can be tested.
-std::optional<std::string> background_mime_type(const std::filesystem::path& path);
-
 
 constexpr bool should_run_maintenance(bool first_cycle, bool request_pending, bool enabled) {
     return request_pending || (first_cycle && enabled);

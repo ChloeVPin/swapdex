@@ -504,38 +504,6 @@ void test_every_app_window_is_a_target() {
     }
     swapdex::test::check(swapdex::app_page_target_ids(nlohmann::json::object()).empty(), "Targets were invented from an empty response");
 }
-
-void test_chat_background_rules() {
-    // The service turns a path into a data URL, so these are the rules it has to hold to
-    // before it reads anything: an absolute path, a paintable type, a real file, and a
-    // size it can afford to hold in memory.
-    namespace fs = std::filesystem;
-    const fs::path root = std::filesystem::temp_directory_path() / ("swx-bg-" + swapdex::random_identifier(6));
-    swapdex::ensure_private_directory(root);
-    const fs::path png = root / "wallpaper.png";
-    // A one pixel PNG, so the file is genuinely a PNG and genuinely tiny.
-    const unsigned char pixel[] = {0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
-                                   0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
-                                   0x89, 0x00, 0x00, 0x00, 0x0a, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0x00, 0x01, 0x00, 0x00,
-                                   0x05, 0x00, 0x01, 0x0d, 0x0a, 0x2d, 0xb4, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae,
-                                   0x42, 0x60, 0x82};
-    {
-        std::ofstream out(png, std::ios::binary);
-        out.write(reinterpret_cast<const char*>(pixel), sizeof(pixel));
-    }
-    swapdex::test::check(swapdex::service_detail::background_mime_type(png).value_or("") == "image/png", "A PNG was not recognised");
-    swapdex::test::check(swapdex::service_detail::background_mime_type(root / "a.JPEG").value_or("") == "image/jpeg", "An uppercase JPEG extension was not recognised");
-    swapdex::test::check(swapdex::service_detail::background_mime_type(root / "a.webp").value_or("") == "image/webp", "A WebP was not recognised");
-    swapdex::test::check(!swapdex::service_detail::background_mime_type(root / "a.svg").has_value(), "An SVG was accepted");
-    swapdex::test::check(!swapdex::service_detail::background_mime_type(root / "a.exe").has_value(), "An executable was accepted as an image");
-    swapdex::test::check(png.is_absolute(), "The test image path is not absolute, so the check is meaningless");
-    swapdex::test::check(std::filesystem::file_size(png) > 0U, "The test image is empty");
-    swapdex::test::check(std::filesystem::file_size(png) <= 4U * 1024U * 1024U, "The test image is larger than the cap");
-
-    std::error_code error;
-    fs::remove_all(root, error);
-}
-
 void test_settings_tabs_are_clickable() {
     // A tab that renders but whose name is missing from whatever validates it looks
     // fine and silently ignores every click, which is exactly how the Appearance tab

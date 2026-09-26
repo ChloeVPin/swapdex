@@ -55,13 +55,6 @@
   let maintenanceEnabled = true;
   let maintenanceIntervalHours = 12;
   let hiddenNativeProfileMenuRows = new Set();
-  let chatBackgroundEnabled = false;
-  let chatBackgroundPath = "";
-  let composerScrim = true;
-  let chatBackgroundDataUrl = "";
-  let chatBackgroundApplied = false;
-  let lastBackgroundCandidates = "";
-  let lastBackgroundReport = "";
   let snapshot = { active: "", profiles: [] };
   let renderGeneration = 0;
   let scheduled = false;
@@ -317,7 +310,7 @@
     return [...new Set(value.filter(id => typeof id === "string" && optionalMenuIds.has(id)))].sort();
   };
   const readPreferences = () => {
-    const result = { blurProfileNames: false, maintenanceEnabled: true, maintenanceIntervalHours: 12, hiddenNativeProfileMenuRows: [], chatBackgroundEnabled: false, chatBackgroundPath: "", composerScrim: true };
+    const result = { blurProfileNames: false, maintenanceEnabled: true, maintenanceIntervalHours: 12, hiddenNativeProfileMenuRows: [] };
     let stored = {};
     try {
       const raw = localStorage.getItem(preferenceStorageKey);
@@ -345,16 +338,13 @@
     result.maintenanceEnabled = stored.maintenanceEnabled === true;
     result.maintenanceIntervalHours = validMaintenanceIntervals.includes(stored.maintenanceIntervalHours) ? stored.maintenanceIntervalHours : 12;
     result.hiddenNativeProfileMenuRows = normalizeHiddenMenuRows(stored.hiddenNativeProfileMenuRows);
-    result.chatBackgroundEnabled = stored.chatBackgroundEnabled === true;
-    result.chatBackgroundPath = typeof stored.chatBackgroundPath === "string" ? stored.chatBackgroundPath : "";
-    result.composerScrim = stored.composerScrim !== false;
     return result;
   };
 
   const writePreferences = () => {
     let saved = true;
     try {
-      localStorage.setItem(preferenceStorageKey, JSON.stringify({ blurProfileNames, maintenanceEnabled, maintenanceIntervalHours, hiddenNativeProfileMenuRows: [...hiddenNativeProfileMenuRows].sort(), chatBackgroundEnabled, chatBackgroundPath, composerScrim }));
+      localStorage.setItem(preferenceStorageKey, JSON.stringify({ blurProfileNames, maintenanceEnabled, maintenanceIntervalHours, hiddenNativeProfileMenuRows: [...hiddenNativeProfileMenuRows].sort() }));
     } catch {
       saved = false;
     }
@@ -416,316 +406,7 @@
   maintenanceEnabled = storedPreferences.maintenanceEnabled;
   maintenanceIntervalHours = storedPreferences.maintenanceIntervalHours;
   hiddenNativeProfileMenuRows = new Set(storedPreferences.hiddenNativeProfileMenuRows);
-  chatBackgroundEnabled = storedPreferences.chatBackgroundEnabled;
-  chatBackgroundPath = storedPreferences.chatBackgroundPath;
-  composerScrim = storedPreferences.composerScrim;
   applyPrivacyPreference();
-
-
-  // The chat background and the composer scrim.
-  //
-  // The app paints its own opaque surfaces, so an image placed behind the document is
-  // invisible until those surfaces are made transparent. Rather than guess at one
-  // selector, the surfaces are found by what they are: the main regions that fill the
-  // window to their edges. Anything not matched is left alone, so a future app version
-  // degrades to a plain background rather than a broken one.
-  // This script also runs before the document exists, as a hook for every new document,
-  // so anything that touches the head or the body has to wait for one. Reaching for them
-  // early threw, which aborted the whole script and left the app with no integration.
-  let chatBackgroundWaiting = false;
-  const whenDocumentReady = run => {
-    if (document.body !== null && document.head !== null) {
-      run();
-      return;
-    }
-    if (chatBackgroundWaiting) {
-      return;
-    }
-    chatBackgroundWaiting = true;
-    document.addEventListener("DOMContentLoaded", () => {
-      chatBackgroundWaiting = false;
-      run();
-    }, { once: true });
-  };
-
-  const installChatBackgroundStyles = () => {
-    if (document.getElementById("swapdex-chat-background-style")) {
-      return;
-    }
-    const style = document.createElement("style");
-    style.id = "swapdex-chat-background-style";
-    // The picture is painted as the background of the chat column itself, so the browser
-    // clips it to that box and it cannot reach the sidebar or the toolbar above. Painting
-    // it on the document instead filled the whole page, and painting it on a fixed layer
-    // covered the interface outright, so the element's own background is the only place
-    // it can live that is both scoped and incapable of covering anything.
-    //
-    // Only colour is given up here, and only one level inside the column, so anything
-    // that scrolls or draws with an image keeps it.
-    style.textContent = `
-      html[data-swapdex-chat-background="on"] [data-swapdex-chat-content="true"] {
-        background-color: transparent !important;
-        background-repeat: no-repeat, no-repeat, no-repeat !important;
-        background-size: cover, cover, cover !important;
-        background-position: center bottom, center center, center center !important;
-        background-attachment: local, local, local !important;
-      }
-      html[data-swapdex-chat-background="on"] [data-swapdex-chat-content="true"] > div {
-        background-color: transparent !important;
-      }
-      /* The bar across the top keeps the colour the app gave it. The value is read
-         from the running app and handed back through a custom property, because
-         guessing a system colour here matched nothing: Canvas resolves to white while
-         the app is dark, and to black while it is light. */
-      html[data-swapdex-chat-background="on"] [data-swapdex-chat-toolbar="true"] {
-        background-color: var(--swapdex-toolbar-surface, transparent) !important;
-      }
-      /* Message bubbles keep their own background so text stays readable. */
-      html[data-swapdex-chat-background="on"] [data-swapdex-chat-bubble] {
-        background-color: rgba(0, 0, 0, 0.55) !important;
-      }
-    `;
-    document.head.append(style);
-  };
-
-  // The three layers of the page background, bottom first: a fade that keeps the
-  // composer readable, a wash so light text works over any picture, then the image.
-  const pageBackgroundLayers = dataUrl => {
-    if (!dataUrl) {
-      return "none";
-    }
-    const wash = "linear-gradient(rgba(0, 0, 0, 0.28), rgba(0, 0, 0, 0.28))";
-    if (!composerScrim) {
-      return wash + ", url(\"" + dataUrl + "\")";
-    }
-    // Sits at the bottom of the page background, behind everything, and is what keeps
-    // the message box readable over any picture.
-    const fade = "linear-gradient(to top, rgba(0, 0, 0, 0.92) 0px, rgba(0, 0, 0, 0.72) 90px, rgba(0, 0, 0, 0.25) 200px, rgba(0, 0, 0, 0) 300px)";
-    return fade + ", " + wash + ", url(\"" + dataUrl + "\")";
-  };
-
-  // One element only: the column the messages live in, which is the sibling of the
-  // toolbar inside the app's main region. Marking more than this is what broke the app,
-  // because the earlier version marked the document, the app root, the fixed wrapper
-  // and every child, and stripped background images from all of them.
-  // The bar across the top of the app. It is the sibling of the content column, and
-  // it is given an opaque surface of its own so the picture never reaches it.
-  const findChatToolbar = () => {
-    for (const main of Array.from(document.querySelectorAll("main"))) {
-      const mainRect = main.getBoundingClientRect();
-      if (mainRect.width < 200 || mainRect.height < 200) {
-        continue;
-      }
-      for (const child of Array.from(main.children)) {
-        const rect = child.getBoundingClientRect();
-        const isToolbar = rect.height > 0 && rect.height < 120 && rect.top < 80;
-        if (isToolbar && getComputedStyle(child).position !== "fixed") {
-          return child;
-        }
-      }
-    }
-    return null;
-  };
-
-  const findChatContent = () => {
-    for (const main of Array.from(document.querySelectorAll("main"))) {
-      const mainRect = main.getBoundingClientRect();
-      if (mainRect.width < 200 || mainRect.height < 200) {
-        continue;
-      }
-      for (const child of Array.from(main.children)) {
-        const rect = child.getBoundingClientRect();
-        // The toolbar is a short strip across the top, not the area behind messages.
-        const isToolbar = rect.height > 0 && rect.height < 120 && rect.top < 80;
-        const isOverlay = getComputedStyle(child).position === "fixed";
-        if (!isToolbar && !isOverlay && rect.width > 200 && rect.height > 120) {
-          return child;
-        }
-      }
-    }
-    return null;
-  };
-
-  let chatContentCache = null;
-  let chatToolbarCache = null;
-  const markChatSurfaces = () => {
-    if (chatContentCache !== null && chatContentCache.isConnected) {
-      return;
-    }
-    if (chatContentCache !== null) {
-      chatContentCache.removeAttribute("data-swapdex-chat-content");
-      chatContentCache = null;
-    }
-    if (chatToolbarCache !== null) {
-      chatToolbarCache.removeAttribute("data-swapdex-chat-toolbar");
-      chatToolbarCache = null;
-    }
-    const found = findChatContent();
-    if (found !== null) {
-      found.setAttribute("data-swapdex-chat-content", "true");
-      chatContentCache = found;
-    }
-    const toolbar = findChatToolbar();
-    if (toolbar !== null) {
-      toolbar.setAttribute("data-swapdex-chat-toolbar", "true");
-      chatToolbarCache = toolbar;
-    }
-  };
-
-  const applyChatBackground = () => {
-    whenDocumentReady(() => {
-      try {
-        paintChatBackground();
-      } catch (error) {
-        reportRendererFailure("chat background", error);
-      }
-    });
-  };
-
-  // Picks the colour for the top bar. The bar's own colour can be translucent, in
-  // which case using it as-is lets the picture tint through, so it is composited over
-  // the app's opaque base surface instead. Everything is read from the running app:
-  // guessing a system colour matched neither theme.
-  const parseColour = value => {
-    const parts = String(value || "").match(/[\d.]+/g);
-    if (!parts || parts.length < 3) {
-      return null;
-    }
-    return {
-      r: Number(parts[0]),
-      g: Number(parts[1]),
-      b: Number(parts[2]),
-      a: parts.length > 3 ? Number(parts[3]) : 1
-    };
-  };
-
-  const over = (top, bottom) => {
-    const alpha = top.a + bottom.a * (1 - top.a);
-    if (alpha <= 0) {
-      return "rgba(0, 0, 0, 0)";
-    }
-    const mix = channel => Math.round((top[channel] * top.a + bottom[channel] * bottom.a * (1 - top.a)) / alpha);
-    return "rgba(" + mix("r") + ", " + mix("g") + ", " + mix("b") + ", " + Math.round(alpha * 1000) / 1000 + ")";
-  };
-
-  const rememberToolbarSurface = () => {
-    const toolbar = chatToolbarCache;
-    if (!(toolbar instanceof HTMLElement) || !toolbar.isConnected) {
-      return;
-    }
-    let surface = "transparent";
-    try {
-      const top = parseColour(getComputedStyle(toolbar).backgroundColor);
-      if (top === null) {
-        return;
-      }
-      if (top.a >= 1) {
-        surface = getComputedStyle(toolbar).backgroundColor;
-      } else {
-        // Composite over whatever the app itself paints behind the bar.
-        let base = null;
-        for (const candidate of [document.querySelector("main"), document.body, document.documentElement]) {
-          if (!(candidate instanceof HTMLElement)) {
-            continue;
-          }
-          const parsed = parseColour(getComputedStyle(candidate).backgroundColor);
-          if (parsed !== null && parsed.a > 0) {
-            base = parsed;
-            break;
-          }
-        }
-        if (base === null) {
-          return;
-        }
-        surface = over(top, base);
-      }
-    } catch {
-      return;
-    }
-    document.documentElement.style.setProperty("--swapdex-toolbar-surface", surface);
-  };
-
-  const paintChatBackground = () => {
-    installChatBackgroundStyles();
-    const root = document.documentElement;
-    rememberToolbarSurface();
-    const wanted = chatBackgroundEnabled && chatBackgroundDataUrl ? "on" : "off";
-    root.setAttribute("data-swapdex-chat-background", wanted);
-    markChatSurfaces();
-    chatBackgroundApplied = true;
-    try {
-      const target = chatContentCache;
-      const background = wanted === "on" && target !== null ? pageBackgroundLayers(chatBackgroundDataUrl) : "none";
-      if (target !== null && target.style.backgroundImage !== background) {
-        target.style.backgroundImage = background;
-      }
-      const painted = wanted === "on" && target !== null && getComputedStyle(target).backgroundImage !== "none";
-      const count = chatContentCache !== null && chatContentCache.isConnected ? 1 : 0;
-      // Report whether it painted. Whether a background shows is otherwise invisible
-      // from the service, and it is the first question anyone asks. Reported once per
-      // distinct outcome so it does not repeat on every pass.
-      const report = (painted ? "painted" : (wanted === "on" ? "hidden by the app" : "not set")) + ":" + String(count);
-      if (report === lastBackgroundReport) {
-        return;
-      }
-      lastBackgroundReport = report;
-      enqueue({
-        v: 1,
-        source: "profile-dropdown",
-        action: "chat-background-status",
-        applied: painted ? "painted" : (wanted === "on" ? "hidden by the app" : "not set"),
-        surfaces: String(count)
-      });
-    } catch (error) {
-      reportRendererFailure("chat background", error);
-    }
-  };
-
-  const updateChatBackgroundFromSnapshot = snapshot => {
-    if (Array.isArray(snapshot?.chatBackgroundCandidates)) {
-      const latest = snapshot.chatBackgroundCandidates.join("\u0000");
-      if (latest !== lastBackgroundCandidates) {
-        lastBackgroundCandidates = latest;
-        const select = document.querySelector("[data-swapdex-background-candidates]");
-        if (select instanceof HTMLSelectElement) {
-          const chosen = select.value;
-          const placeholder = makeElement("option", "", "Choose an image from your computer");
-          placeholder.value = "";
-          select.textContent = "";
-          select.append(placeholder);
-          let shown = 0;
-          for (const entry of snapshot.chatBackgroundCandidates) {
-            if (typeof entry !== "string" || shown >= 60) {
-              continue;
-            }
-            const option = makeElement("option", "", entry.replace(/^.*\//, ""));
-            option.value = entry;
-            option.title = entry;
-            select.append(option);
-            shown += 1;
-          }
-          if (chosen && snapshot.chatBackgroundCandidates.includes(chosen)) {
-            select.value = chosen;
-          }
-        }
-      }
-    }
-    const next = typeof snapshot?.chatBackground === "string" ? snapshot.chatBackground : "";
-    const source = typeof snapshot?.chatBackgroundSource === "string" ? snapshot.chatBackgroundSource : "";
-    let changed = false;
-    if (next !== chatBackgroundDataUrl) {
-      chatBackgroundDataUrl = next;
-      changed = true;
-    }
-    if (source && source !== chatBackgroundPath) {
-      chatBackgroundPath = source;
-      changed = true;
-    }
-    if (changed || !chatBackgroundApplied) {
-      chatContentCache = null;
-      applyChatBackground();
-    }
-  };
 
   Object.defineProperty(window, "__swapdexTakePendingRequest", {
     value: () => pendingRequests.shift() ?? null,
@@ -1944,203 +1625,6 @@
     menuTab.dataset.swapdexSettingsTab = "menu";
     menuTab.setAttribute("role", "tab");
     menuTab.setAttribute("aria-controls", "swapdex-settings-panel-menu");
-    const appearanceTab = makeElement("button", "swapdex-settings-tab", "Appearance");
-    appearanceTab.type = "button";
-    appearanceTab.id = "swapdex-settings-tab-appearance";
-    appearanceTab.dataset.swapdexSettingsTab = "appearance";
-    appearanceTab.setAttribute("role", "tab");
-    appearanceTab.setAttribute("aria-controls", "swapdex-settings-panel-appearance");
-    tabList.append(privacyTab, accountsTab, menuTab, appearanceTab);
-
-
-    const appearancePanel = makeElement("section", "swapdex-settings-panel flex flex-col gap-6 px-[var(--detail-page-inline-inset,0px)] py-6");
-    appearancePanel.id = "swapdex-settings-panel-appearance";
-    appearancePanel.dataset.swapdexSettingsPanel = "appearance";
-    appearancePanel.setAttribute("role", "tabpanel");
-    appearancePanel.setAttribute("aria-labelledby", appearanceTab.id);
-    const appearanceHeading = makeElement("h2", "swapdex-settings-section-title heading-md font-normal", "Appearance");
-    const appearanceDescription = makeElement("p", "text-sm text-codex-description", "Give the chat area your own background image. The composer stays readable over any picture.");
-    const backgroundCard = makeElement("section", "swapdex-settings-card flex flex-col gap-4 rounded-xl");
-    const backgroundRow = makeElement("div", "flex items-center justify-between gap-6");
-    const backgroundCopy = makeElement("div", "flex min-w-0 flex-col gap-1");
-    const backgroundLabel = makeElement("span", "text-sm text-default", "Custom chat background");
-    backgroundLabel.id = "swapdex-background-label";
-    const backgroundHelp = makeElement("span", "text-sm text-codex-description", "Uses a PNG, JPEG, WebP or GIF up to 4 MB from your computer.");
-    backgroundHelp.id = "swapdex-background-description";
-    backgroundCopy.append(backgroundLabel, backgroundHelp);
-    const backgroundToggle = makeElement("button", "swapdex-switch");
-    backgroundToggle.type = "button";
-    backgroundToggle.dataset.swapdexBackgroundToggle = "true";
-    backgroundToggle.setAttribute("role", "switch");
-    backgroundToggle.setAttribute("aria-checked", String(chatBackgroundEnabled));
-    backgroundToggle.setAttribute("aria-labelledby", backgroundLabel.id);
-    backgroundToggle.setAttribute("aria-describedby", backgroundHelp.id);
-    backgroundToggle.style.cssText = "position:relative;display:inline-flex;width:2rem;height:1.25rem;padding:0;flex-shrink:0;border:0;border-radius:999px;cursor:pointer;";
-    backgroundToggle.style.backgroundColor = chatBackgroundEnabled ? settingsState.accentColor : settingsState.offColor;
-    const backgroundThumb = makeElement("span", "swapdex-switch-thumb");
-    backgroundThumb.style.cssText = "position:absolute;top:50%;left:0.125rem;width:1rem;height:1rem;border-radius:999px;background:" + (settingsState.thumbColor || "#ffffff") + ";transition:transform 120ms ease;";
-    backgroundThumb.style.transform = "translateY(-50%) " + (chatBackgroundEnabled ? "translateX(0.75rem)" : "translateX(0)");
-    backgroundToggle.append(backgroundThumb);
-    updateToggleVisual(backgroundToggle);
-    const backgroundControl = makeElement("div", "flex shrink-0 items-center");
-    backgroundControl.append(backgroundToggle);
-    backgroundRow.append(backgroundCopy, backgroundControl);
-
-    const candidateRow = makeElement("div", "flex items-center gap-2");
-    const candidateSelect = makeElement("select", "swapdex-background-candidates text-sm");
-    candidateSelect.style.cssText = "flex:1;min-width:0;padding:0.5rem 0.625rem;border-radius:0.5rem;border:1px solid color-mix(in srgb, currentColor 18%, transparent);background:transparent;color:inherit;font:inherit;font-size:0.8125rem;";
-    candidateSelect.setAttribute("aria-label", "Images found on this computer");
-    candidateSelect.dataset.swapdexBackgroundCandidates = "true";
-    const candidatePlaceholder = makeElement("option", "", "Choose an image from your computer");
-    candidatePlaceholder.value = "";
-    candidateSelect.append(candidatePlaceholder);
-    const refreshCandidates = makeElement("button", "swapdex-background-refresh text-sm text-codex-description", "Refresh");
-    refreshCandidates.type = "button";
-    refreshCandidates.style.cssText = "padding:0.5rem 0.5rem;border:0;background:transparent;cursor:pointer;font:inherit;font-size:0.8125rem;white-space:nowrap;";
-    candidateRow.append(candidateSelect, refreshCandidates);
-    const requestCandidates = () => {
-      enqueue({ v: 1, source: "profile-dropdown", action: "chat-background-list" });
-    };
-    const fillCandidates = list => {
-      if (!Array.isArray(list)) {
-        return;
-      }
-      const chosen = candidateSelect.value;
-      candidateSelect.textContent = "";
-      candidateSelect.append(candidatePlaceholder);
-      let shown = 0;
-      for (const entry of list) {
-        if (typeof entry !== "string" || shown >= 60) {
-          continue;
-        }
-        const option = makeElement("option", "", entry.replace(/^.*\//, ""));
-        option.value = entry;
-        option.title = entry;
-        candidateSelect.append(option);
-        shown += 1;
-      }
-      if (shown === 0) {
-        backgroundStatus.textContent = "No images were found in your pictures folders.";
-      }
-      if (chosen && list.includes(chosen)) {
-        candidateSelect.value = chosen;
-      }
-    };
-    candidateSelect.addEventListener("change", () => {
-      if (candidateSelect.value) {
-        pathInput.value = candidateSelect.value;
-        applyPathButton.click();
-      }
-    });
-    refreshCandidates.addEventListener("click", requestCandidates);
-
-    const pathRow = makeElement("div", "flex items-center gap-2");
-    const pathInput = makeElement("input", "swapdex-background-path");
-    pathInput.type = "text";
-    pathInput.value = chatBackgroundPath;
-    pathInput.placeholder = "/home/you/Pictures/wallpaper.png";
-    pathInput.setAttribute("aria-label", "Full path to the background image");
-    pathInput.style.cssText = "flex:1;min-width:0;padding:0.5rem 0.625rem;border-radius:0.5rem;border:1px solid color-mix(in srgb, currentColor 18%, transparent);background:transparent;color:inherit;font:inherit;font-size:0.8125rem;";
-    const applyPathButton = makeElement("button", "swapdex-background-apply text-sm", "Apply");
-    applyPathButton.type = "button";
-    applyPathButton.style.cssText = "padding:0.5rem 0.75rem;border-radius:0.5rem;border:0;cursor:pointer;background:" + settingsState.accentColor + ";color:#fff;font:inherit;font-size:0.8125rem;";
-    const clearPathButton = makeElement("button", "swapdex-background-clear text-sm text-codex-description", "Clear");
-    clearPathButton.type = "button";
-    clearPathButton.style.cssText = "padding:0.5rem 0.5rem;border:0;background:transparent;cursor:pointer;font:inherit;font-size:0.8125rem;";
-    pathRow.append(pathInput, applyPathButton, clearPathButton);
-    const backgroundStatus = makeElement("p", "text-xs text-codex-description", chatBackgroundPath ? "Using " + chatBackgroundPath : "No image set.");
-    backgroundStatus.setAttribute("aria-live", "polite");
-    backgroundStatus.dataset.swapdexBackgroundStatus = "true";
-
-    const scrimCard = makeElement("section", "swapdex-settings-card flex flex-col gap-4 rounded-xl");
-    const scrimRow = makeElement("div", "flex items-center justify-between gap-6");
-    const scrimCopy = makeElement("div", "flex min-w-0 flex-col gap-1");
-    const scrimLabel = makeElement("span", "text-sm text-default", "Blur behind the composer");
-    scrimLabel.id = "swapdex-scrim-label";
-    const scrimHelp = makeElement("span", "text-sm text-codex-description", "Fades a blur upward from the bottom so the message box is always readable.");
-    scrimHelp.id = "swapdex-scrim-description";
-    scrimCopy.append(scrimLabel, scrimHelp);
-    const scrimToggle = makeElement("button", "swapdex-switch");
-    scrimToggle.type = "button";
-    scrimToggle.dataset.swapdexScrimToggle = "true";
-    scrimToggle.setAttribute("role", "switch");
-    scrimToggle.setAttribute("aria-checked", String(composerScrim));
-    scrimToggle.setAttribute("aria-labelledby", scrimLabel.id);
-    scrimToggle.setAttribute("aria-describedby", scrimHelp.id);
-    scrimToggle.style.cssText = "position:relative;display:inline-flex;width:2rem;height:1.25rem;padding:0;flex-shrink:0;border:0;border-radius:999px;cursor:pointer;";
-    scrimToggle.style.backgroundColor = composerScrim ? settingsState.accentColor : settingsState.offColor;
-    const scrimThumb = makeElement("span", "swapdex-switch-thumb");
-    scrimThumb.style.cssText = "position:absolute;top:50%;left:0.125rem;width:1rem;height:1rem;border-radius:999px;background:" + (settingsState.thumbColor || "#ffffff") + ";transition:transform 120ms ease;";
-    scrimThumb.style.transform = "translateY(-50%) " + (composerScrim ? "translateX(0.75rem)" : "translateX(0)");
-    scrimToggle.append(scrimThumb);
-    updateToggleVisual(scrimToggle);
-    const scrimControl = makeElement("div", "flex shrink-0 items-center");
-    scrimControl.append(scrimToggle);
-    scrimRow.append(scrimCopy, scrimControl);
-    const scrimNote = makeElement("p", "text-xs text-codex-description", "Independent of the background image, so it also helps on the normal background.");
-    scrimCard.append(scrimRow, scrimNote);
-
-    backgroundCard.append(backgroundRow, candidateRow, pathRow, backgroundStatus);
-    appearancePanel.append(appearanceHeading, appearanceDescription, backgroundCard, scrimCard);
-
-    requestCandidates();
-    const requestChatBackground = path => {
-      enqueue({ v: 1, source: "profile-dropdown", action: "chat-background", path });
-    };
-    backgroundToggle.addEventListener("click", () => {
-      chatBackgroundEnabled = !chatBackgroundEnabled;
-      backgroundToggle.setAttribute("aria-checked", String(chatBackgroundEnabled));
-      backgroundToggle.style.backgroundColor = chatBackgroundEnabled ? settingsState.accentColor : settingsState.offColor;
-      backgroundThumb.style.transform = "translateY(-50%) " + (chatBackgroundEnabled ? "translateX(0.75rem)" : "translateX(0)");
-      if (chatBackgroundEnabled && !chatBackgroundPath) {
-        pathInput.focus();
-      }
-      requestChatBackground(chatBackgroundEnabled ? pathInput.value.trim() : "");
-      if (!chatBackgroundEnabled) {
-        chatBackgroundDataUrl = "";
-        applyChatBackground();
-      }
-      writePreferences();
-    });
-    applyPathButton.addEventListener("click", () => {
-      const value = pathInput.value.trim();
-      chatBackgroundPath = value;
-      chatBackgroundEnabled = value.length > 0;
-      backgroundToggle.setAttribute("aria-checked", String(chatBackgroundEnabled));
-      backgroundToggle.style.backgroundColor = chatBackgroundEnabled ? settingsState.accentColor : settingsState.offColor;
-      backgroundThumb.style.transform = "translateY(-50%) " + (chatBackgroundEnabled ? "translateX(0.75rem)" : "translateX(0)");
-      backgroundStatus.textContent = value ? "Applying " + value : "No image set.";
-      requestChatBackground(value);
-      writePreferences();
-    });
-    pathInput.addEventListener("keydown", event => {
-      if (event.key === "Enter") {
-        event.preventDefault();
-        applyPathButton.click();
-      }
-    });
-    clearPathButton.addEventListener("click", () => {
-      pathInput.value = "";
-      chatBackgroundPath = "";
-      chatBackgroundEnabled = false;
-      chatBackgroundDataUrl = "";
-      backgroundToggle.setAttribute("aria-checked", "false");
-      backgroundToggle.style.backgroundColor = settingsState.offColor;
-      backgroundThumb.style.transform = "translateY(-50%) translateX(0)";
-      backgroundStatus.textContent = "No image set.";
-      applyChatBackground();
-      requestChatBackground("");
-      writePreferences();
-    });
-    scrimToggle.addEventListener("click", () => {
-      composerScrim = !composerScrim;
-      scrimToggle.setAttribute("aria-checked", String(composerScrim));
-      scrimToggle.style.backgroundColor = composerScrim ? settingsState.accentColor : settingsState.offColor;
-      scrimThumb.style.transform = "translateY(-50%) " + (composerScrim ? "translateX(0.75rem)" : "translateX(0)");
-      applyChatBackground();
-      writePreferences();
-    });
-
     const privacyPanel = makeElement("section", "swapdex-settings-panel flex flex-col gap-6 px-[var(--detail-page-inline-inset,0px)] py-6");
     privacyPanel.id = "swapdex-settings-panel-privacy";
     privacyPanel.dataset.swapdexSettingsPanel = "privacy";
@@ -2267,7 +1751,7 @@
     menuCard.append(menuList, menuNote);
     menuPanel.append(menuHeading, menuDescription, menuCard);
 
-    page.append(header, tabList, privacyPanel, accountsPanel, menuPanel, appearancePanel);
+    page.append(header, tabList, privacyPanel, accountsPanel, menuPanel);
     return page;
   };
 
@@ -2702,13 +2186,6 @@
 
   const reconcile = () => {
     scheduled = false;
-    // The chat pane does not exist when this script is injected, because the app is
-    // still on its startup loader. Re-checking as the app boots is what makes the
-    // background attach to the real layout instead of nothing.
-    markChatSurfaces();
-    if (chatContentCache !== null && chatContentCache.isConnected) {
-      applyChatBackground();
-    }
     reconcileSettings();
     markProfileTriggerName();
     const identified = identifyProfileMenu();
@@ -2740,7 +2217,6 @@
         active: typeof parsed.active === "string" ? parsed.active : "",
         profiles: parsed.profiles.slice(0, 32).filter(profile => profile && typeof profile.id === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(profile.id))
       };
-      updateChatBackgroundFromSnapshot(parsed);
       renderGeneration += 1;
       schedule();
     } catch {
@@ -2749,12 +2225,6 @@
   };
 
   window.__swapdexShowStatus = value => {
-    if (typeof value === "string" && /image|path/i.test(value)) {
-      const status = document.querySelector("[data-swapdex-background-status]") || document.querySelector("[data-swapdex-background-candidates]");
-      if (status) {
-        status.textContent = value;
-      }
-    }
     if (typeof value !== "string") {
       return;
     }
@@ -2776,15 +2246,6 @@
   // Painted last, once every declaration in this scope exists. Doing it earlier ran into
   // the temporal dead zone and aborted the whole script, which left the app with nothing
   // injected at all rather than a visible error.
-  applyChatBackground();
-
-  // Re-ask for the picture on every start. The picture itself is not kept here, so a
-  // fresh instance of this script, which is what a reload produces, would otherwise sit
-  // blank until the service happened to push state for some other reason.
-  if (chatBackgroundEnabled && chatBackgroundPath) {
-    enqueue({ v: 1, source: "profile-dropdown", action: "chat-background", path: chatBackgroundPath });
-  }
-
   const observer = new MutationObserver(schedule);
   observer.observe(document.documentElement, { childList: true, subtree: true });
   window.addEventListener("load", schedule, { once: true });
