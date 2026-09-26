@@ -123,6 +123,7 @@ int Service::run() {
         store_->clear_live_auth();
     }
     start_signal_thread();
+    load_remembered_background();
     connect_browser();
     refresh_profiles();
     ui_thread_ = std::thread([this] { process_ui_events(); });
@@ -286,6 +287,18 @@ void Service::handle_ui_payload(const std::string& payload) {
         const std::string scope = request.value("scope", std::string("renderer"));
         const std::string text = request.value("text", std::string("unknown failure"));
         report_error("the interface hit an error in " + scope + ": " + text);
+        return;
+    }
+    if (action == "chat-background-status") {
+        // Whether the background actually painted is the question a user asks, and it
+        // is invisible from here, so the interface reports what it managed to do.
+        const std::string applied = request.value("applied", std::string("no"));
+        const std::string surfaces = request.value("surfaces", std::string("?"));
+        report_status("Chat background " + applied + ", chat surfaces marked: " + surfaces);
+        return;
+    }
+    if (action == "chat-background-list") {
+        send_background_candidates();
         return;
     }
     if (action == "chat-background") {
@@ -540,6 +553,12 @@ void Service::send_snapshot_to(const std::string& session) {
     if (chat_background(background_data, background_path)) {
         payload["chatBackground"] = background_data;
         payload["chatBackgroundSource"] = background_path;
+    }
+    {
+        const std::lock_guard<std::mutex> lock(background_mutex_);
+        if (!background_candidates_.empty()) {
+            payload["chatBackgroundCandidates"] = background_candidates_;
+        }
     }
     payload["profiles"] = nlohmann::json::array();
     for (const ProfileRecord& record : store_->list()) {
@@ -874,18 +893,39 @@ void Service::set_chat_background(const nlohmann::json& request) {
         report_error("That image type is not supported. Use a PNG, JPEG, WebP or GIF.");
         return;
     }
-    if (std::filesystem::is_symlink(path, error) || error || !std::filesystem::is_regular_file(path, error) || error) {
-        report_error("No image was found at that path");
+    // A symlinked wallpaper is perfectly normal, so resolve rather than refuse. Nothing
+    // here can execute anything: the bytes are re-encoded as a data URL and the only
+    // formats accepted are raster types.
+    const std::filesystem::path resolved = std::filesystem::weakly_canonical(path, error);
+    const std::filesystem::path& target = error || resolved.empty() ? path : resolved;
+    if (!std::filesystem::exists(target)) {
+        report_error("No file exists at " + path.string());
         return;
     }
-    const std::uintmax_t size = std::filesystem::file_size(path, error);
-    if (error || size == 0U || size > service_detail::maximum_background_bytes) {
-        report_error("That image is empty or larger than 4 MB");
+    if (std::filesystem::is_directory(target, error) || error) {
+        report_error("That path is a folder, not an image: " + path.string());
+        return;
+    }
+    if (!std::filesystem::is_regular_file(target, error) || error) {
+        report_error("That path is not a readable image file: " + path.string());
+        return;
+    }
+    const std::uintmax_t size = std::filesystem::file_size(target, error);
+    if (error) {
+        report_error("That image could not be measured: " + path.string());
+        return;
+    }
+    if (size == 0U) {
+        report_error("That image file is empty: " + path.string());
+        return;
+    }
+    if (size > service_detail::maximum_background_bytes) {
+        report_error("That image is larger than 4 MB: " + path.string());
         return;
     }
     std::string bytes;
     try {
-        bytes = read_file(path, service_detail::maximum_background_bytes);
+        bytes = read_file(target, service_detail::maximum_background_bytes);
     } catch (const std::exception&) {
         report_error("That image could not be read");
         return;
@@ -908,9 +948,53 @@ void Service::set_chat_background(const nlohmann::json& request) {
     if (data_url != chat_background_data_url_) {
         chat_background_data_url_ = data_url;
     }
-    chat_background_source_ = path.string();
+    chat_background_source_ = target.string();
     background_dirty_.store(true);
+    remember_background_path(target);
     report_status("Chat background updated");
+    send_snapshot();
+}
+
+void Service::send_background_candidates() {
+    // Offering the pictures already on the machine is far more reliable than making
+    // someone type an absolute path and getting it subtly wrong.
+    nlohmann::json candidates = nlohmann::json::array();
+    static const std::vector<std::string> folders = {"Pictures", "Desktop", "Downloads", "Images", "Wallpapers"};
+    for (const std::string& folder : folders) {
+        const std::filesystem::path directory = home_directory() / folder;
+        std::error_code error;
+        if (!std::filesystem::is_directory(directory, error) || error) {
+            continue;
+        }
+        std::vector<std::pair<std::uintmax_t, std::filesystem::path>> found;
+        for (const auto& entry : std::filesystem::directory_iterator(directory, error)) {
+            if (error) {
+                break;
+            }
+            const std::filesystem::path& candidate = entry.path();
+            std::error_code file_error;
+            if (!service_detail::background_mime_type(candidate).has_value() || !std::filesystem::is_regular_file(candidate, file_error) || file_error) {
+                continue;
+            }
+            const std::uintmax_t size = std::filesystem::file_size(candidate, file_error);
+            if (file_error || size == 0U || size > service_detail::maximum_background_bytes) {
+                continue;
+            }
+            found.emplace_back(size, candidate);
+        }
+        std::sort(found.begin(), found.end(), [](const auto& left, const auto& right) { return left.first > right.first; });
+        for (const auto& item : found) {
+            if (candidates.size() >= 60U) {
+                break;
+            }
+            candidates.push_back(item.second.string());
+        }
+    }
+    const std::lock_guard<std::mutex> lock(background_mutex_);
+    if (background_candidates_ != candidates) {
+        background_candidates_ = candidates;
+        background_dirty_.store(true);
+    }
     send_snapshot();
 }
 
@@ -919,7 +1003,48 @@ void Service::clear_chat_background() {
     chat_background_data_url_.clear();
     chat_background_source_.clear();
     background_dirty_.store(true);
+    remember_background_path({});
     send_snapshot();
+}
+
+void Service::remember_background_path(const std::filesystem::path& path) {
+    if (!store_.has_value()) {
+        return;
+    }
+    // The choice has to outlive the service, otherwise a restart silently drops the
+    // background and the user has to set it again.
+    nlohmann::json stored = nlohmann::json::object();
+    stored["version"] = 1;
+    stored["path"] = path.empty() ? std::string() : path.string();
+    try {
+        write_json_file_atomically(store_->root() / "chat-background.json", stored, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write);
+    } catch (const std::exception&) {
+    }
+}
+
+void Service::load_remembered_background() {
+    if (!store_.has_value()) {
+        return;
+    }
+    const std::filesystem::path settings_file = store_->root() / "chat-background.json";
+    std::error_code error;
+    if (!std::filesystem::is_regular_file(settings_file, error) || error) {
+        return;
+    }
+    nlohmann::json stored;
+    try {
+        stored = read_json_file(settings_file, 64U * 1024U);
+    } catch (const std::exception&) {
+        return;
+    }
+    const std::string path = stored.value("path", std::string());
+    if (path.empty()) {
+        return;
+    }
+    try {
+        set_chat_background(nlohmann::json{{"path", path}});
+    } catch (const std::exception&) {
+    }
 }
 
 bool Service::chat_background(std::string& data_url, std::string& source) const {

@@ -60,6 +60,8 @@
   let composerScrim = true;
   let chatBackgroundDataUrl = "";
   let chatBackgroundApplied = false;
+  let lastBackgroundCandidates = "";
+  let lastBackgroundReport = "";
   let snapshot = { active: "", profiles: [] };
   let renderGeneration = 0;
   let scheduled = false;
@@ -489,12 +491,23 @@
         mask-image: linear-gradient(to top, #000 0%, #000 34%, rgba(0,0,0,0.55) 62%, transparent 100%);
       }
       html[data-swapdex-composer-scrim="on"] #${composerScrimId} { display: block; }
-      /* Transparent surfaces let the image through. Scoped to the app root only. */
+      /* Transparent surfaces let the image through. The app paints its background on the
+         outermost elements, so the document, the app root and the marked panes all have
+         to give it up. Anything the app paints with a background image is removed, and
+         only colour, so no iconography is lost. */
       html[data-swapdex-chat-background="on"] body,
       html[data-swapdex-chat-background="on"] #root,
-      html[data-swapdex-chat-background="on"] [data-swapdex-chat-surface] {
+      html[data-swapdex-chat-background="on"] [data-swapdex-chat-surface],
+      html[data-swapdex-chat-background="on"] [data-swapdex-chat-surface] > div,
+      html[data-swapdex-chat-background="on"] [data-swapdex-chat-surface] main {
         background-color: transparent !important;
         background-image: none !important;
+      }
+      /* The sidebar keeps its own background so it stays readable over any picture. */
+      html[data-swapdex-chat-background="on"] nav.sidebar-navigation,
+      html[data-swapdex-chat-background="on"] nav[aria-label] {
+        background-color: color-mix(in srgb, currentColor 7%, rgba(0, 0, 0, 0.55)) !important;
+        backdrop-filter: blur(10px);
       }
       /* Message bubbles keep their own background so text stays readable. */
       html[data-swapdex-chat-background="on"] [data-swapdex-chat-bubble] {
@@ -511,28 +524,44 @@
   // per element, which on the real app took long enough to time out the injection
   // entirely, so the walk is bounded and the answer is cached.
   const findChatSurfaces = () => {
-    const width = window.innerWidth;
     const found = [];
-    let level = document.body;
-    for (let depth = 0; depth < 5 && level; depth += 1) {
-      let next = null;
-      for (const child of Array.from(level.children)) {
-        if (!(child instanceof HTMLElement) || !child.isConnected) {
-          continue;
-        }
+    const add = element => {
+      if (element instanceof HTMLElement && element.isConnected && !found.includes(element)) {
+        found.push(element);
+      }
+    };
+    // The app paints the chat area inside its main region: a toolbar header, and below
+    // it the content column. Those are marked, plus the fixed wrapper above them, and
+    // anything fixed is skipped because those are overlays such as toasts and menus,
+    // which are not the chat and would be pointless to make transparent.
+    const isOverlay = element => {
+      const position = getComputedStyle(element).position;
+      return position === "fixed" || position === "sticky";
+    };
+    const large = (element, minHeight) => {
+      const rect = element.getBoundingClientRect();
+      return rect.width > 200 && rect.height > minHeight;
+    };
+    for (const main of Array.from(document.querySelectorAll("main"))) {
+      if (!large(main, 200)) {
+        continue;
+      }
+      add(main);
+      for (const child of Array.from(main.children)) {
+        // The header is the toolbar across the top, not the area behind the messages.
         const rect = child.getBoundingClientRect();
-        // Starts to the right of the sidebar and reaches the window edge: the chat pane.
-        if (rect.width > 160 && rect.height > 160 && rect.left >= 40 && rect.right >= width - 4) {
-          found.push(child);
-          next = child;
+        const looksLikeToolbar = rect.height > 0 && rect.height < 120 && rect.top < 80;
+        if (!looksLikeToolbar && !isOverlay(child) && large(child, 120)) {
+          add(child);
         }
       }
-      if (!next) {
-        break;
-      }
-      level = next;
     }
-    return found.slice(-2);
+    for (const wrapper of Array.from(document.querySelectorAll("div.fixed.inset-0"))) {
+      if (large(wrapper, 200) && wrapper.querySelector("main")) {
+        add(wrapper);
+      }
+    }
+    return found.slice(0, 4);
   };
 
   let chatSurfaceCache = [];
@@ -580,9 +609,61 @@
     }
     markChatSurfaces();
     chatBackgroundApplied = true;
+    // Say whether it actually painted. Whether a background shows is otherwise
+    // invisible from the service, and it is the first question anyone asks.
+    try {
+      const painted = layer.style.backgroundImage !== "" && getComputedStyle(layer).display !== "none";
+      const visible = painted ? getComputedStyle(layer).backgroundImage !== "none" : false;
+      const count = chatSurfaceCache.length;
+      // Report whether it painted. Whether a background shows is otherwise invisible
+      // from the service, and it is the first question anyone asks. Reported once per
+      // distinct outcome so it does not repeat on every pass.
+      const report = (visible ? "painted" : (painted ? "hidden by the app" : "not set")) + ":" + String(count);
+      if (report === lastBackgroundReport) {
+        return;
+      }
+      lastBackgroundReport = report;
+      enqueue({
+        v: 1,
+        source: "profile-dropdown",
+        action: "chat-background-status",
+        applied: visible ? "painted" : (painted ? "hidden by the app" : "not set"),
+        surfaces: String(count)
+      });
+    } catch (error) {
+      reportRendererFailure("chat background status", error);
+    }
   };
 
   const updateChatBackgroundFromSnapshot = snapshot => {
+    if (Array.isArray(snapshot?.chatBackgroundCandidates)) {
+      const latest = snapshot.chatBackgroundCandidates.join("\u0000");
+      if (latest !== lastBackgroundCandidates) {
+        lastBackgroundCandidates = latest;
+        const select = document.querySelector("[data-swapdex-background-candidates]");
+        if (select instanceof HTMLSelectElement) {
+          const chosen = select.value;
+          const placeholder = makeElement("option", "", "Choose an image from your computer");
+          placeholder.value = "";
+          select.textContent = "";
+          select.append(placeholder);
+          let shown = 0;
+          for (const entry of snapshot.chatBackgroundCandidates) {
+            if (typeof entry !== "string" || shown >= 60) {
+              continue;
+            }
+            const option = makeElement("option", "", entry.replace(/^.*\//, ""));
+            option.value = entry;
+            option.title = entry;
+            select.append(option);
+            shown += 1;
+          }
+          if (chosen && snapshot.chatBackgroundCandidates.includes(chosen)) {
+            select.value = chosen;
+          }
+        }
+      }
+    }
     const next = typeof snapshot?.chatBackground === "string" ? snapshot.chatBackground : "";
     const source = typeof snapshot?.chatBackgroundSource === "string" ? snapshot.chatBackgroundSource : "";
     let changed = false;
@@ -610,10 +691,6 @@
   // Anything that goes wrong in here used to be invisible, because a throw during
   // evaluation only fails the injection and says nothing about why. Failures are
   // reported to the service so they land in the service log.
-  // Called once the background helpers above exist. Calling it earlier hit the temporal
-  // dead zone and aborted the whole script, which is why nothing was injected at all.
-  applyChatBackground();
-
   const reportRendererFailure = (scope, error) => {
     try {
       const text = String((error && error.message) || error);
@@ -1863,6 +1940,54 @@
     backgroundControl.append(backgroundToggle);
     backgroundRow.append(backgroundCopy, backgroundControl);
 
+    const candidateRow = makeElement("div", "flex items-center gap-2");
+    const candidateSelect = makeElement("select", "swapdex-background-candidates text-sm");
+    candidateSelect.style.cssText = "flex:1;min-width:0;padding:0.5rem 0.625rem;border-radius:0.5rem;border:1px solid color-mix(in srgb, currentColor 18%, transparent);background:transparent;color:inherit;font:inherit;font-size:0.8125rem;";
+    candidateSelect.setAttribute("aria-label", "Images found on this computer");
+    candidateSelect.dataset.swapdexBackgroundCandidates = "true";
+    const candidatePlaceholder = makeElement("option", "", "Choose an image from your computer");
+    candidatePlaceholder.value = "";
+    candidateSelect.append(candidatePlaceholder);
+    const refreshCandidates = makeElement("button", "swapdex-background-refresh text-sm text-codex-description", "Refresh");
+    refreshCandidates.type = "button";
+    refreshCandidates.style.cssText = "padding:0.5rem 0.5rem;border:0;background:transparent;cursor:pointer;font:inherit;font-size:0.8125rem;white-space:nowrap;";
+    candidateRow.append(candidateSelect, refreshCandidates);
+    const requestCandidates = () => {
+      enqueue({ v: 1, source: "profile-dropdown", action: "chat-background-list" });
+    };
+    const fillCandidates = list => {
+      if (!Array.isArray(list)) {
+        return;
+      }
+      const chosen = candidateSelect.value;
+      candidateSelect.textContent = "";
+      candidateSelect.append(candidatePlaceholder);
+      let shown = 0;
+      for (const entry of list) {
+        if (typeof entry !== "string" || shown >= 60) {
+          continue;
+        }
+        const option = makeElement("option", "", entry.replace(/^.*\//, ""));
+        option.value = entry;
+        option.title = entry;
+        candidateSelect.append(option);
+        shown += 1;
+      }
+      if (shown === 0) {
+        backgroundStatus.textContent = "No images were found in your pictures folders.";
+      }
+      if (chosen && list.includes(chosen)) {
+        candidateSelect.value = chosen;
+      }
+    };
+    candidateSelect.addEventListener("change", () => {
+      if (candidateSelect.value) {
+        pathInput.value = candidateSelect.value;
+        applyPathButton.click();
+      }
+    });
+    refreshCandidates.addEventListener("click", requestCandidates);
+
     const pathRow = makeElement("div", "flex items-center gap-2");
     const pathInput = makeElement("input", "swapdex-background-path");
     pathInput.type = "text";
@@ -1909,9 +2034,10 @@
     const scrimNote = makeElement("p", "text-xs text-codex-description", "Independent of the background image, so it also helps on the normal background.");
     scrimCard.append(scrimRow, scrimNote);
 
-    backgroundCard.append(backgroundRow, pathRow, backgroundStatus);
+    backgroundCard.append(backgroundRow, candidateRow, pathRow, backgroundStatus);
     appearancePanel.append(appearanceHeading, appearanceDescription, backgroundCard, scrimCard);
 
+    requestCandidates();
     const requestChatBackground = path => {
       enqueue({ v: 1, source: "profile-dropdown", action: "chat-background", path });
     };
@@ -2530,6 +2656,13 @@
 
   const reconcile = () => {
     scheduled = false;
+    // The chat pane does not exist when this script is injected, because the app is
+    // still on its startup loader. Re-checking as the app boots is what makes the
+    // background attach to the real layout instead of nothing.
+    markChatSurfaces();
+    if (chatSurfaceCache.length > 0) {
+      applyChatBackground();
+    }
     reconcileSettings();
     markProfileTriggerName();
     const identified = identifyProfileMenu();
@@ -2571,7 +2704,7 @@
 
   window.__swapdexShowStatus = value => {
     if (typeof value === "string" && /image|path/i.test(value)) {
-      const status = document.querySelector("[data-swapdex-background-status]");
+      const status = document.querySelector("[data-swapdex-background-status]") || document.querySelector("[data-swapdex-background-candidates]");
       if (status) {
         status.textContent = value;
       }
@@ -2593,6 +2726,11 @@
       renderStatus(identified);
     }
   };
+
+  // Painted last, once every declaration in this scope exists. Doing it earlier ran into
+  // the temporal dead zone and aborted the whole script, which left the app with nothing
+  // injected at all rather than a visible error.
+  applyChatBackground();
 
   const observer = new MutationObserver(schedule);
   observer.observe(document.documentElement, { childList: true, subtree: true });

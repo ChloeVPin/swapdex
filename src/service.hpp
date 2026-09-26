@@ -71,6 +71,10 @@ private:
     // look preference rather than anything to do with an account.
     void set_chat_background(const nlohmann::json& request);
     void clear_chat_background();
+    void send_background_candidates();
+    void remember_background_path(const std::filesystem::path& path);
+    void load_remembered_background();
+    nlohmann::json background_candidates_ = nlohmann::json::array();
     bool chat_background(std::string& data_url, std::string& source) const;
     mutable std::mutex background_mutex_;
     std::string chat_background_data_url_;
