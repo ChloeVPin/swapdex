@@ -14,6 +14,7 @@ void test_platform_layer();
 void test_shutdown_channel_is_interruptible();
 void test_every_app_window_is_a_target();
 void test_chat_background_rules();
+void test_settings_tabs_are_clickable();
 void test_shell_bridge();
 void test_account_root_is_explicit();
 void test_start_reports_the_truth();
@@ -32,6 +33,7 @@ int main(int argc, char** argv) {
         {"shutdown_channel", test_shutdown_channel_is_interruptible},
         {"app_windows", test_every_app_window_is_a_target},
         {"chat_background", test_chat_background_rules},
+        {"settings_tabs", test_settings_tabs_are_clickable},
         {"shell_bridge", test_shell_bridge},
         {"account_root_scope", test_account_root_is_explicit},
         {"start_reports_the_truth", test_start_reports_the_truth},

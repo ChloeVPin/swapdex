@@ -2264,7 +2264,14 @@
   };
 
   const activateSettingsTab = tabName => {
-    if (tabName !== "privacy" && tabName !== "accounts" && tabName !== "menu") {
+    // A tab is valid when its panel is on the page. This used to be a list of names
+    // kept in step by hand, and forgetting to add one left that tab rendering but
+    // silently ignoring every click.
+    const page = settingsState.page;
+    if (!(page instanceof HTMLElement) || !page.isConnected) {
+      return;
+    }
+    if (page.querySelector(`[data-swapdex-settings-panel="${CSS.escape(tabName)}"]`) === null) {
       return;
     }
     settingsState.tab = tabName;

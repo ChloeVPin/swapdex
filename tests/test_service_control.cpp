@@ -535,3 +535,46 @@ void test_chat_background_rules() {
     std::error_code error;
     fs::remove_all(root, error);
 }
+
+void test_settings_tabs_are_clickable() {
+    // A tab that renders but whose name is missing from whatever validates it looks
+    // fine and silently ignores every click, which is exactly how the Appearance tab
+    // shipped. Every tab must have a panel, and the panel must be added to the page.
+    const std::filesystem::path asset = swapdex::locate_source_asset(swapdex::platform::executable_directory());
+    swapdex::test::check(!asset.empty(), "The renderer asset could not be found to check");
+    const std::string source = swapdex::read_file(asset, 2U * 1024U * 1024U);
+
+    std::vector<std::string> tabs;
+    std::vector<std::string> panels;
+    // Reads the string value assigned to an attribute, so the tab and panel names come
+    // from the same source the browser sees.
+    const auto collect = [&source](const std::string& attribute, std::vector<std::string>& into) {
+        const std::string needle = "." + attribute + " = \"";
+        std::size_t at = 0U;
+        while ((at = source.find(needle, at)) != std::string::npos) {
+            const std::size_t value_start = at + needle.size();
+            const std::size_t value_end = source.find('"', value_start);
+            if (value_end == std::string::npos) {
+                break;
+            }
+            const std::string name = source.substr(value_start, value_end - value_start);
+            if (std::find(into.begin(), into.end(), name) == into.end()) {
+                into.push_back(name);
+            }
+            at = value_end;
+        }
+    };
+    collect("dataset.swapdexSettingsTab", tabs);
+    collect("dataset.swapdexSettingsPanel", panels);
+    swapdex::test::check(!tabs.empty(), "No settings tabs were found in the renderer asset");
+    for (const std::string& name : tabs) {
+        if (std::find(panels.begin(), panels.end(), name) == panels.end()) {
+            throw swapdex::test::Failure("The settings tab " + name + " has no panel, so it could never open");
+        }
+    }
+    // Activation must not be gated on a list of names kept by hand.
+    if (source.find("activateSettingsTab") != std::string::npos) {
+        swapdex::test::check(source.find("[data-swapdex-settings-panel=\"") != std::string::npos,
+                             "Settings tab activation is validated by a hand kept list rather than by the panels that exist");
+    }
+}
