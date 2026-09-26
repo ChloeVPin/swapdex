@@ -57,12 +57,21 @@ private:
     void account_maintenance_loop();
     void maintain_accounts(const std::optional<std::string>& target_id);
     void launch_onboarding(const std::string& id, bool reauthenticate = false);
+    // True once an account has credentials on disk, which is what actually ends a sign-in.
+    bool credential_present(const std::string& id);
     void switch_profile(const std::string& id);
     void remove_profile(const std::string& id);
     void report_error(std::string message);
     void report_status(std::string message);
     std::string injection_source() const;
-    std::string find_target(const nlohmann::json& targets) const;
+    std::vector<std::string> find_targets(const nlohmann::json& targets) const;
+    // Attaches to one app window and injects, returning true when the interface verified.
+    bool attach_window(const nlohmann::json& target);
+    bool primary_session_ready() const;
+    std::string primary_session_id() const;
+    void clear_sessions();
+    void send_snapshot_to(const std::string& session);
+    std::vector<std::string> session_ids() const;
     void acquire_singleton_lock();
     void release_singleton_lock();
     void start_signal_thread();
@@ -91,7 +100,11 @@ private:
     std::optional<CdpPipe> cdp_;
     std::optional<ProfileStore> store_;
     std::optional<AppServerClient> app_server_;
-    std::string active_session_id_;
+    // Every app window gets its own session, because the main window and the settings
+    // window are separate targets and only the main one used to be injected.
+    mutable std::mutex sessions_mutex_;
+    std::vector<std::string> session_ids_;
+    std::string primary_session_;
     std::shared_ptr<platform::InstanceLock> singleton_lock_;
 };
 

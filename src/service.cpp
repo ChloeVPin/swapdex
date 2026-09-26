@@ -8,6 +8,7 @@
 #include <iostream>
 #include <poll.h>
 #include <pthread.h>
+#include <unistd.h>
 #include <sys/stat.h>
 #include <thread>
 #include <vector>
@@ -22,6 +23,18 @@
 #include "util.hpp"
 
 namespace swapdex {
+
+namespace {
+
+// The service launches the app itself, so the app is a child of this process. Passing
+// the real id lets the foreign app check tell our own app apart from one the user
+// started by hand, which it could not do when every caller passed a placeholder.
+std::int64_t own_process_id() {
+    return static_cast<std::int64_t>(::getpid());
+}
+
+}
+
 namespace {
 
 constexpr std::size_t maximum_ui_payload_bytes = 4096U;
@@ -95,7 +108,7 @@ int Service::run() {
     acquire_singleton_lock();
     store_->initialize();
     app_server_.emplace();
-    if (const auto pid = running_unmanaged_chatgpt(-1); pid.has_value()) {
+    if (const auto pid = running_unmanaged_chatgpt(own_process_id()); pid.has_value()) {
         throw Error("unmanaged_codex_running", "Close the normally launched Codex application before starting Swapdex");
     }
     const auto active = store_->active();
@@ -187,20 +200,23 @@ void Service::request_stop() {
 void Service::process_ui_events() {
     while (!stopping_.load()) {
         std::optional<std::string> payload;
-        if (cdp_.has_value() && cdp_->running() && !active_session_id_.empty()) {
-            try {
-                const nlohmann::json result = cdp_->request("Runtime.evaluate", {{"expression", "window.__swapdexTakePendingRequest && window.__swapdexTakePendingRequest()"}, {"returnByValue", true}}, active_session_id_, std::chrono::seconds(1));
-                if (result.contains("result") && result.at("result").is_object() && result.at("result").contains("value") && result.at("result").at("value").is_string()) {
-                    std::string candidate = result.at("result").at("value").get<std::string>();
-                    if (!candidate.empty() && candidate.size() <= maximum_ui_payload_bytes) {
-                        payload = std::move(candidate);
+        if (cdp_.has_value() && cdp_->running()) {
+            for (const std::string& session : session_ids()) {
+                try {
+                    const nlohmann::json result = cdp_->request("Runtime.evaluate", {{"expression", "window.__swapdexTakePendingRequest && window.__swapdexTakePendingRequest()"}, {"returnByValue", true}}, session, std::chrono::seconds(1));
+                    if (result.contains("result") && result.at("result").is_object() && result.at("result").contains("value") && result.at("result").at("value").is_string()) {
+                        std::string candidate = result.at("result").at("value").get<std::string>();
+                        if (!candidate.empty() && candidate.size() <= maximum_ui_payload_bytes) {
+                            payload = std::move(candidate);
+                            break;
+                        }
                     }
+                } catch (const Error& error) {
+                    if (error.code() == "cdp_closed" || stopping_.load()) {
+                        return;
+                    }
+                } catch (const std::exception&) {
                 }
-            } catch (const Error& error) {
-                if (error.code() == "cdp_closed" || stopping_.load()) {
-                    return;
-                }
-            } catch (const std::exception&) {
             }
         }
         if (payload.has_value()) {
@@ -349,11 +365,69 @@ void Service::handle_ui_payload(const std::string& payload) {
     }
 }
 
+bool Service::attach_window(const nlohmann::json& target) {
+    if (!cdp_.has_value() || !cdp_->running() || !target.is_object() || !target.contains("targetId") || !target.at("targetId").is_string()) {
+        return false;
+    }
+    const std::string target_id = target.at("targetId").get<std::string>();
+    try {
+        const nlohmann::json attached = cdp_->request("Target.attachToTarget", {{"targetId", target_id}, {"flatten", true}}, std::nullopt, std::chrono::seconds(5));
+        if (!attached.contains("sessionId") || !attached.at("sessionId").is_string()) {
+            return false;
+        }
+        const std::string session = attached.at("sessionId").get<std::string>();
+        cdp_->request("Runtime.enable", nlohmann::json::object(), session, std::chrono::seconds(5));
+        cdp_->request("Page.enable", nlohmann::json::object(), session, std::chrono::seconds(5));
+        const std::string source = injection_source();
+        // Both forms are needed: the evaluate covers a window that already exists, and
+        // the new document hook covers a window that reloads or is created later.
+        cdp_->request("Page.addScriptToEvaluateOnNewDocument", {{"source", source}}, session, std::chrono::seconds(10));
+        cdp_->request("Runtime.evaluate", {{"expression", source}, {"returnByValue", true}, {"awaitPromise", true}}, session, std::chrono::seconds(10));
+        const nlohmann::json verification = cdp_->request("Runtime.evaluate", {{"expression", "window.__swapdexInstalled === true && typeof window.__swapdexApplySnapshot === 'function' && typeof window.__swapdexTakePendingRequest === 'function'"}, {"returnByValue", true}}, session, std::chrono::seconds(5));
+        const bool ok = verification.contains("result") && verification.at("result").is_object() && verification.at("result").contains("value")
+            && verification.at("result").at("value").is_boolean() && verification.at("result").at("value").get<bool>();
+        if (!ok) {
+            return false;
+        }
+        const std::lock_guard<std::mutex> lock(sessions_mutex_);
+        if (std::find(session_ids_.begin(), session_ids_.end(), session) == session_ids_.end()) {
+            session_ids_.push_back(session);
+        }
+        if (primary_session_.empty() || target.value("url", std::string()).find("index.html") != std::string::npos) {
+            primary_session_ = session;
+        }
+        return true;
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
+bool Service::primary_session_ready() const {
+    const std::lock_guard<std::mutex> lock(sessions_mutex_);
+    return !primary_session_.empty();
+}
+
+std::string Service::primary_session_id() const {
+    const std::lock_guard<std::mutex> lock(sessions_mutex_);
+    return primary_session_;
+}
+
+void Service::clear_sessions() {
+    const std::lock_guard<std::mutex> lock(sessions_mutex_);
+    session_ids_.clear();
+    primary_session_.clear();
+}
+
+std::vector<std::string> Service::session_ids() const {
+    const std::lock_guard<std::mutex> lock(sessions_mutex_);
+    return session_ids_;
+}
+
 void Service::connect_browser() {
     if (!store_.has_value() || !app_server_.has_value()) {
         throw Error("service_not_initialized", "Swapdex is not initialized");
     }
-    if (const auto pid = running_unmanaged_chatgpt(-1); pid.has_value()) {
+    if (const auto pid = running_unmanaged_chatgpt(own_process_id()); pid.has_value()) {
         throw Error("unmanaged_codex_running", "Close the normally launched Codex application before switching");
     }
     ensure_private_directory(store_->electron_user_data());
@@ -362,43 +436,45 @@ void Service::connect_browser() {
         if (!event.is_object() || !event.contains("method") || !event.at("method").is_string()) {
             return;
         }
-        if (event.at("method").get<std::string>() == "Swapdex.pipeClosed" && !transitioning_.load()) {
+        const std::string method = event.at("method").get<std::string>();
+        if (method == "Swapdex.pipeClosed" && !transitioning_.load()) {
             browser_running_.store(false);
+            return;
+        }
+        // The settings window is a separate window that only exists once the user opens
+        // it, so it has to be injected when it appears rather than only at startup.
+        if ((method == "Target.targetCreated" || method == "Target.targetInfoChanged") && event.contains("params")) {
+            attach_window(event.at("params"));
         }
     });
     try {
         cdp_->start();
         cdp_->request("Target.setDiscoverTargets", {{"discover", true}}, std::nullopt, std::chrono::seconds(5));
-        nlohmann::json target;
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
-        while (!stopping_.load() && std::chrono::steady_clock::now() < deadline) {
+        const std::string source = injection_source();
+        bool injected_any = false;
+        std::string first_failure;
+        const auto attach_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+        while (!stopping_.load() && std::chrono::steady_clock::now() < attach_deadline) {
             const nlohmann::json targets = cdp_->request("Target.getTargets", nlohmann::json::object(), std::nullopt, std::chrono::seconds(2));
-            const std::string selected = find_target(targets);
-            if (!selected.empty()) {
-                target = nlohmann::json::parse(selected);
+            for (const std::string& target_id : find_targets(targets)) {
+                if (attach_window(nlohmann::json{{"targetId", target_id}})) {
+                    injected_any = true;
+                } else if (first_failure.empty()) {
+                    first_failure = "the Codex window could not be prepared";
+                }
+            }
+            if (injected_any) {
                 break;
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(200));
         }
-        if (target.is_null()) {
-            throw Error("cdp_target_missing", "The Codex renderer could not be identified");
+        if (!injected_any) {
+            if (!first_failure.empty()) {
+                throw Error("cdp_target_missing", first_failure);
+            }
+            throw Error("cdp_target_missing", "The Codex window could not be identified");
         }
-        if (!target.contains("targetId") || !target.at("targetId").is_string()) {
-            throw Error("cdp_target_invalid", "The Codex renderer target is invalid");
-        }
-        const std::string target_id = target.at("targetId").get<std::string>();
-        const nlohmann::json attached = cdp_->request("Target.attachToTarget", {{"targetId", target_id}, {"flatten", true}}, std::nullopt, std::chrono::seconds(5));
-        if (!attached.contains("sessionId") || !attached.at("sessionId").is_string()) {
-            throw Error("cdp_target_invalid", "The Codex renderer session is invalid");
-        }
-        active_session_id_ = attached.at("sessionId").get<std::string>();
-        cdp_->request("Runtime.enable", nlohmann::json::object(), active_session_id_, std::chrono::seconds(5));
-        cdp_->request("Page.enable", nlohmann::json::object(), active_session_id_, std::chrono::seconds(5));
-        const std::string source = injection_source();
-        cdp_->request("Page.addScriptToEvaluateOnNewDocument", {{"source", source}}, active_session_id_, std::chrono::seconds(10));
-        cdp_->request("Runtime.evaluate", {{"expression", source}, {"returnByValue", true}, {"awaitPromise", true}}, active_session_id_, std::chrono::seconds(10));
-        const nlohmann::json verification = cdp_->request("Runtime.evaluate", {{"expression", "window.__swapdexInstalled === true && typeof window.__swapdexApplySnapshot === 'function' && typeof window.__swapdexTakePendingRequest === 'function'"}, {"returnByValue", true}}, active_session_id_, std::chrono::seconds(5));
-        if (!verification.contains("result") || !verification.at("result").is_object() || !verification.at("result").contains("value") || !verification.at("result").at("value").is_boolean() || !verification.at("result").at("value").get<bool>()) {
+        if (!primary_session_ready()) {
             throw Error("cdp_injection_failed", "The Codex profile menu integration could not be verified");
         }
         transitioning_.store(false);
@@ -409,7 +485,7 @@ void Service::connect_browser() {
             cdp_->close();
             cdp_.reset();
         }
-        active_session_id_.clear();
+        clear_sessions();
         transitioning_.store(false);
         browser_running_.store(false);
         throw;
@@ -418,7 +494,7 @@ void Service::connect_browser() {
             cdp_->close();
             cdp_.reset();
         }
-        active_session_id_.clear();
+        clear_sessions();
         transitioning_.store(false);
         browser_running_.store(false);
         throw Error("cdp_protocol", "The browser control exchange was invalid");
@@ -426,7 +502,16 @@ void Service::connect_browser() {
 }
 
 void Service::send_snapshot() {
-    if (!cdp_.has_value() || !cdp_->running() || active_session_id_.empty() || !store_.has_value()) {
+    if (!cdp_.has_value() || !cdp_->running() || !store_.has_value()) {
+        return;
+    }
+    for (const std::string& session : session_ids()) {
+        send_snapshot_to(session);
+    }
+}
+
+void Service::send_snapshot_to(const std::string& session) {
+    if (session.empty() || !store_.has_value()) {
         return;
     }
     const auto active = store_->active();
@@ -464,7 +549,9 @@ void Service::send_snapshot() {
         payload["profiles"].push_back(std::move(item));
     }
     const std::string expression = "window.__swapdexApplySnapshot && window.__swapdexApplySnapshot(" + payload.dump() + ")";
-    cdp_->request("Runtime.evaluate", {{"expression", expression}, {"returnByValue", true}}, active_session_id_, std::chrono::seconds(5));
+    if (const std::string primary = primary_session_id(); !primary.empty()) {
+            cdp_->request("Runtime.evaluate", {{"expression", expression}, {"returnByValue", true}}, primary, std::chrono::seconds(5));
+        }
 }
 
 void Service::refresh_profiles() {
@@ -613,9 +700,9 @@ void Service::launch_onboarding(const std::string& id, bool reauthenticate) {
         browser_running_.store(false);
         cdp_->close();
         cdp_.reset();
-        active_session_id_.clear();
+        clear_sessions();
     }
-    if (const auto pid = running_unmanaged_chatgpt(-1); pid.has_value()) {
+    if (const auto pid = running_unmanaged_chatgpt(own_process_id()); pid.has_value()) {
         if (had_shared_app && previous.has_value()) {
             try {
                 store_->capture_live_auth(previous->id);
@@ -646,10 +733,37 @@ void Service::launch_onboarding(const std::string& id, bool reauthenticate) {
         return;
     }
     report_status(reauthenticate ? "Finish re-authenticating the account, then close its Codex window" : "Sign in to the new account, then close its Codex window");
-    while (onboarding.running() && !stopping_.load()) {
+    // Completion is the credential appearing, not the sign-in window closing. On macOS
+    // the app process stays alive after its window is dismissed, so waiting for the
+    // process to exit hung here indefinitely and the account could never be added. The
+    // wait is bounded either way so it can never hang.
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(10);
+    bool signed_in = false;
+    while (!stopping_.load() && std::chrono::steady_clock::now() < deadline) {
+        if (credential_present(id)) {
+            signed_in = true;
+            break;
+        }
+        if (!onboarding.running()) {
+            // The window is gone. Give the credential a moment to land before giving up.
+            for (int grace = 0; grace < 20 && !stopping_.load(); ++grace) {
+                if (credential_present(id)) {
+                    signed_in = true;
+                    break;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(250));
+            }
+            break;
+        }
         std::this_thread::sleep_for(std::chrono::milliseconds(250));
     }
     onboarding.close();
+    if (!signed_in && !stopping_.load() && !credential_present(id)) {
+        store_->prune_pending_placeholders();
+        report_error("Sign-in was not completed before the window closed");
+        send_snapshot();
+        return;
+    }
     if (stopping_.load()) {
         return;
     }
@@ -683,6 +797,14 @@ void Service::launch_onboarding(const std::string& id, bool reauthenticate) {
     }
 }
 
+bool Service::credential_present(const std::string& id) {
+    if (!store_.has_value()) {
+        return false;
+    }
+    std::error_code error;
+    return std::filesystem::is_regular_file(store_->profile_auth(id), error) && !error;
+}
+
 void Service::switch_profile(const std::string& id) {
     if (!store_.has_value() || !cdp_.has_value() || !cdp_->running()) {
         return;
@@ -697,10 +819,10 @@ void Service::switch_profile(const std::string& id) {
     browser_running_.store(false);
     cdp_->close();
     cdp_.reset();
-    active_session_id_.clear();
+    clear_sessions();
     bool live_replaced = false;
     try {
-        if (const auto pid = running_unmanaged_chatgpt(-1); pid.has_value()) {
+        if (const auto pid = running_unmanaged_chatgpt(own_process_id()); pid.has_value()) {
             throw Error("unmanaged_codex_running", "Another Codex process is still running");
         }
         store_->capture_live_auth(previous->id);
@@ -712,7 +834,7 @@ void Service::switch_profile(const std::string& id) {
             cdp_->close();
             cdp_.reset();
         }
-        active_session_id_.clear();
+        clear_sessions();
         browser_running_.store(false);
         try {
             if (live_replaced) {
@@ -761,9 +883,9 @@ void Service::remove_profile(const std::string& id) {
     browser_running_.store(false);
     cdp_->close();
     cdp_.reset();
-    active_session_id_.clear();
+    clear_sessions();
     try {
-        if (const auto pid = running_unmanaged_chatgpt(-1); pid.has_value()) {
+        if (const auto pid = running_unmanaged_chatgpt(own_process_id()); pid.has_value()) {
             throw Error("unmanaged_codex_running", "Another Codex process is still running");
         }
         const RemovalResult result = store_->remove(id);
@@ -774,7 +896,7 @@ void Service::remove_profile(const std::string& id) {
             cdp_->close();
             cdp_.reset();
         }
-        active_session_id_.clear();
+        clear_sessions();
         browser_running_.store(false);
         try {
             connect_browser();
@@ -787,12 +909,15 @@ void Service::remove_profile(const std::string& id) {
 }
 
 void Service::report_error(std::string message) {
-    if (!cdp_.has_value() || !cdp_->running() || active_session_id_.empty()) {
+    const std::string primary = primary_session_id();
+    if (!cdp_.has_value() || !cdp_->running() || primary.empty()) {
         return;
     }
     const std::string expression = "window.__swapdexShowStatus && window.__swapdexShowStatus(" + nlohmann::json(message).dump() + ")";
     try {
-        cdp_->request("Runtime.evaluate", {{"expression", expression}, {"returnByValue", true}}, active_session_id_, std::chrono::seconds(5));
+        if (const std::string primary = primary_session_id(); !primary.empty()) {
+            cdp_->request("Runtime.evaluate", {{"expression", expression}, {"returnByValue", true}}, primary, std::chrono::seconds(5));
+        }
     } catch (const Error&) {
     }
 }
@@ -821,13 +946,19 @@ std::string Service::injection_source() const {
     throw Error("injection_asset_missing", "The Swapdex renderer integration is missing");
 }
 
-std::string Service::find_target(const nlohmann::json& targets) const {
+namespace {
+
+// Every page the app owns, whatever its path. The main window and the settings window
+// are separate targets, and requiring exactly one match meant only the main window was
+// ever injected, so the whole settings section was missing on macOS.
+std::vector<std::string> app_page_target_ids(const nlohmann::json& targets) {
+    std::vector<std::string> ids;
     if (!targets.is_object() || !targets.contains("targetInfos") || !targets.at("targetInfos").is_array()) {
-        return {};
+        return ids;
     }
-    std::vector<nlohmann::json> matches;
     for (const nlohmann::json& target : targets.at("targetInfos")) {
-        if (!target.is_object() || !target.contains("type") || !target.at("type").is_string() || target.at("type").get<std::string>() != "page" || !target.contains("url") || !target.at("url").is_string()) {
+        if (!target.is_object() || !target.contains("type") || !target.at("type").is_string() || target.at("type").get<std::string>() != "page"
+            || !target.contains("url") || !target.at("url").is_string() || !target.contains("targetId") || !target.at("targetId").is_string()) {
             continue;
         }
         if (target.contains("attached") && target.at("attached").is_boolean() && target.at("attached").get<bool>()) {
@@ -838,11 +969,18 @@ std::string Service::find_target(const nlohmann::json& targets) const {
         if (suffix != std::string::npos) {
             url.resize(suffix);
         }
-        if (url == "app://-/index.html") {
-            matches.push_back(target);
+        if (url.rfind("app://-/", 0) != 0U) {
+            continue;
         }
+        ids.push_back(target.at("targetId").get<std::string>());
     }
-    return matches.size() == 1U ? matches.front().dump() : std::string();
+    return ids;
+}
+
+}
+
+std::vector<std::string> Service::find_targets(const nlohmann::json& targets) const {
+    return app_page_target_ids(targets);
 }
 
 void Service::acquire_singleton_lock() {
@@ -873,7 +1011,8 @@ void handle_stop_signal(int) {
     const int descriptor = stop_pipe_write_end.load();
     if (descriptor >= 0) {
         const char byte = 1;
-        static_cast<void>(::write(descriptor, &byte, 1));
+        const ssize_t written = ::write(descriptor, &byte, 1);
+        static_cast<void>(written);
     }
 }
 
@@ -906,7 +1045,8 @@ void Service::start_signal_thread() {
             if (ready > 0) {
                 if ((entry.revents & (POLLIN | POLLHUP | POLLERR)) != 0) {
                     char drain[64] = {0};
-                    static_cast<void>(::read(signal_pipe_read_, drain, sizeof(drain)));
+                    const ssize_t drained = ::read(signal_pipe_read_, drain, sizeof(drain));
+                    static_cast<void>(drained);
                     request_stop();
                 }
             } else if (ready < 0 && errno != EINTR) {

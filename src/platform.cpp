@@ -831,16 +831,18 @@ bool close_unmanaged_chatgpt() {
     if (!pid.has_value()) {
         return true;
     }
-    // The app has several helper processes, so ask the whole tree to leave first.
+    // The app takes a few seconds to shut down cleanly, and reporting failure because
+    // it had not finished yet was wrong: the app really was closing. Wait patiently
+    // before insisting, and only then force it.
     request_exit(*pid, false);
-    for (int attempt = 0; attempt < 40; ++attempt) {
+    for (int attempt = 0; attempt < 150; ++attempt) {
         if (!process_alive(*pid)) {
             return true;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
     request_exit(*pid, true);
-    for (int attempt = 0; attempt < 20; ++attempt) {
+    for (int attempt = 0; attempt < 50; ++attempt) {
         if (!process_alive(*pid)) {
             return true;
         }
