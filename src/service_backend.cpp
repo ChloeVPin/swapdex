@@ -104,6 +104,12 @@ public:
     }
 
 private:
+    // launchctl needs the numeric user id in a gui domain target. Omitting it gives
+    // "Unrecognized target specifier", so every verb failed on macOS.
+    static std::string domain_target() {
+        return "gui/" + std::to_string(platform::current_user_id()) + "/" + std::string(macos_service_label);
+    }
+
     int invoke(const std::vector<std::string>& arguments) const {
         std::vector<std::string> full;
         full.reserve(arguments.size() + 1U);
@@ -175,42 +181,53 @@ public:
 
     int enable(bool start) override {
         const std::string target = platform::to_native(registration_file());
-        const std::string label(macos_service_label);
         const int loaded = run({"load", "-w", target});
         if (!start) {
             return loaded;
         }
-        return run({"kickstart", "gui/" + label});
+        return run({"kickstart", domain_target()});
     }
 
     int start() override {
-        const std::string label(macos_service_label);
-        return run({"kickstart", "gui/" + label});
+        return run({"kickstart", domain_target()});
     }
 
     bool active() const override {
-        const std::string label(macos_service_label);
-        return invoke({"print", "gui/" + label}) == 0;
+        return invoke({"print", domain_target()}) == 0;
     }
 
     int stop() override {
-        const std::string label(macos_service_label);
-        return run({"kill", "SIGTERM", "gui/" + label});
+        return run({"kill", "SIGTERM", domain_target()});
     }
 
     int status() override {
-        const std::string label(macos_service_label);
-        return invoke({"print", "gui/" + label});
+        return invoke({"print", domain_target()});
     }
 
     int disable() override {
-        const std::string target = platform::to_native(registration_file());
-        const int unloaded = run({"bootout", "gui/" + std::string(macos_service_label)});
-        const int removed = run({"unload", "-w", target});
-        return removed == 0 ? removed : unloaded;
+        // bootout is the supported way to remove a loaded job. unload is legacy and
+        // returns success even when nothing was loaded, so the result is verified
+        // afterwards rather than trusted.
+        const int unloaded = run({"bootout", domain_target()});
+        if (unloaded == 0 && !loaded()) {
+            return 0;
+        }
+        return unloaded == 0 ? 1 : unloaded;
+    }
+
+    // True when launchd still knows about the job, which is how a failed bootout is
+    // detected instead of leaving a running service behind.
+    bool loaded() const {
+        return invoke({"print", domain_target()}) == 0;
     }
 
 private:
+    // launchctl needs the numeric user id in a gui domain target. Omitting it gives
+    // "Unrecognized target specifier", so every verb failed on macOS.
+    static std::string domain_target() {
+        return "gui/" + std::to_string(platform::current_user_id()) + "/" + std::string(macos_service_label);
+    }
+
     int invoke(const std::vector<std::string>& arguments) const {
         std::vector<std::string> full;
         full.reserve(arguments.size() + 1U);

@@ -26,7 +26,10 @@ struct AppServerSnapshot {
 
 class AppServerClient {
 public:
-    explicit AppServerClient(std::filesystem::path executable = SWAPDEX_CODEX_BINARY);
+    // Empty means resolve the Codex command line tool at run time. A path baked in at
+    // compile time is wrong on any machine whose app layout differs from the build
+    // machine, which is how plan and usage silently stopped being populated.
+    explicit AppServerClient(std::filesystem::path executable = {});
 
     AppServerSnapshot query(const std::filesystem::path& codex_home, std::chrono::milliseconds timeout = std::chrono::seconds(60), bool proactive_token_refresh = false);
 

@@ -5,6 +5,8 @@
 #include <filesystem>
 #include <fstream>
 #include <optional>
+#include <poll.h>
+#include <chrono>
 #include <string>
 #include <vector>
 
@@ -83,8 +85,24 @@ void test_service_control() {
     const std::filesystem::path registration = expected_registration(runtime_for(paths));
     const std::string backend_id = swapdex::make_service_backend(runtime_for(paths))->id();
     std::vector<std::vector<std::string>> calls;
-    auto runner = [&calls](const std::vector<std::string>& arguments) {
+    // Model a service manager honestly: the job is running until something stops it,
+    // and a query answers accordingly. Returning success for every call made a running
+    // service indistinguishable from a stopped one.
+    bool service_running = true;
+    auto runner = [&calls, &service_running](const std::vector<std::string>& arguments) {
         calls.push_back(arguments);
+        const auto verb = [&](const std::string& name) {
+            return std::find(arguments.begin(), arguments.end(), name) != arguments.end();
+        };
+        if (verb("is-active") || verb("print") || verb("status")) {
+            return service_running ? 0 : 1;
+        }
+        if (verb("disable") || verb("bootout") || verb("unload") || verb("stop")) {
+            service_running = false;
+        }
+        if (verb("start") || verb("kickstart") || verb("enable") || verb("load")) {
+            service_running = true;
+        }
         return 0;
     };
     swapdex::ServiceControl control(paths, runner);
@@ -419,4 +437,31 @@ void test_release_bundle_layout() {
 
     std::error_code error;
     fs::remove_all(root, error);
+}
+
+void test_shutdown_channel_is_interruptible() {
+    // The service used to wait for a stop signal in a way that could block forever, so
+    // quitting the app left the service hung and it never relaunched the app. The
+    // shutdown channel must be a pipe waited on with a timeout, not a blocking wait.
+    int descriptors[2] = {-1, -1};
+    swapdex::test::check(swapdex::platform::make_close_on_exec_pipe(descriptors), "The shutdown channel could not be created");
+    swapdex::test::check(descriptors[0] >= 0 && descriptors[1] >= 0, "The shutdown channel has no descriptors");
+
+    // Nothing written: the wait must come back on its own rather than block.
+    pollfd entry {};
+    entry.fd = descriptors[0];
+    entry.events = POLLIN;
+    const auto start = std::chrono::steady_clock::now();
+    const int ready = ::poll(&entry, 1, 200);
+    const auto waited = std::chrono::steady_clock::now() - start;
+    swapdex::test::check(ready == 0, "Waiting on an idle shutdown channel did not time out");
+    swapdex::test::check(waited < std::chrono::seconds(2), "Waiting on an idle shutdown channel took far longer than its timeout");
+
+    // A poke wakes it immediately, which is how a stop signal gets through.
+    const char byte = 1;
+    swapdex::test::check(::write(descriptors[1], &byte, 1) == 1, "The shutdown channel could not be poked");
+    swapdex::test::check(::poll(&entry, 1, 200) > 0, "A poked shutdown channel did not wake the wait");
+
+    ::close(descriptors[0]);
+    ::close(descriptors[1]);
 }

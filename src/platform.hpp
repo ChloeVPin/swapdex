@@ -20,6 +20,8 @@ Os current_os();
 // Locations. Every one of these respects the matching environment variable first so
 // that a user can override the layout without changing code.
 std::filesystem::path home_directory();
+// The numeric user id, which launchd needs in a gui domain target.
+unsigned long current_user_id();
 std::filesystem::path state_directory();
 std::filesystem::path data_directory();
 std::filesystem::path config_directory();
@@ -34,6 +36,10 @@ std::filesystem::path default_electron_user_data();
 // installs one, so the binary is looked up rather than assumed.
 std::vector<std::filesystem::path> chatgpt_binary_candidates();
 std::filesystem::path find_chatgpt_binary();
+// Locates the Codex command line tool the app uses for its app server. The app moves
+// its internal layout between versions, so this is resolved next to the app we already
+// found, with a PATH lookup as the fallback. Empty means it could not be found.
+std::filesystem::path find_codex_cli_binary();
 bool matches_chatgpt_binary(const std::filesystem::path& path);
 std::filesystem::path chatgpt_executable_name();
 // The Codex command line binary, preferring whatever the user already has on PATH so

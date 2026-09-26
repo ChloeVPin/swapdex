@@ -47,13 +47,15 @@ target_compile_definitions(swapdex_core PUBLIC
     SWAPDEX_VERSION="${PROJECT_VERSION}"
 )
 
-# The Codex install is discovered at runtime so one build serves every machine.
+# Both binaries are discovered at run time, next to the app or on PATH, so one build
+# serves every machine. Baking in absolute paths made the build machine's layout the
+# only one that worked, and the CLI app server silently stopped answering elsewhere.
 if(WIN32)
-    target_compile_definitions(swapdex_core PUBLIC SWAPDEX_CODEX_BINARY="codex.exe" SWAPDEX_CHATGPT_BINARY="Codex.exe")
+    target_compile_definitions(swapdex_core PUBLIC SWAPDEX_CHATGPT_BINARY="Codex.exe")
 elseif(APPLE)
-    target_compile_definitions(swapdex_core PUBLIC SWAPDEX_CODEX_BINARY="/Applications/Codex.app/Contents/Resources/codex" SWAPDEX_CHATGPT_BINARY="/Applications/Codex.app/Contents/MacOS/Codex")
+    target_compile_definitions(swapdex_core PUBLIC SWAPDEX_CHATGPT_BINARY="Codex")
 else()
-    target_compile_definitions(swapdex_core PUBLIC SWAPDEX_CODEX_BINARY="/usr/lib/chatgpt/resources/codex" SWAPDEX_CHATGPT_BINARY="/usr/lib/chatgpt/ChatGPT")
+    target_compile_definitions(swapdex_core PUBLIC SWAPDEX_CHATGPT_BINARY="ChatGPT")
 endif()
 
 if(WIN32)
@@ -111,6 +113,7 @@ endif()
     add_test(NAME maintenance_schedule COMMAND swapdex_tests maintenance_schedule)
     add_test(NAME service_control_exec COMMAND swapdex_tests service_control_exec)
     add_test(NAME platform_layer COMMAND swapdex_tests platform_layer)
+    add_test(NAME shutdown_channel COMMAND swapdex_tests shutdown_channel)
     add_test(NAME shell_bridge COMMAND swapdex_tests shell_bridge)
     add_test(NAME account_root_scope COMMAND swapdex_tests account_root_scope)
     add_test(NAME start_reports_the_truth COMMAND swapdex_tests start_reports_the_truth)
@@ -118,7 +121,7 @@ endif()
     add_test(NAME cli_help COMMAND swapdex --help)
     add_test(NAME cli_version COMMAND swapdex version)
     add_test(NAME cli_invalid COMMAND swapdex invalid-command)
-    set_tests_properties(profile_store json_rpc app_server_refresh service_control maintenance_schedule service_control_exec platform_layer shell_bridge account_root_scope start_reports_the_truth release_bundle_layout cli_help cli_version cli_invalid PROPERTIES TIMEOUT 30)
+    set_tests_properties(profile_store json_rpc app_server_refresh service_control maintenance_schedule service_control_exec platform_layer shutdown_channel shell_bridge account_root_scope start_reports_the_truth release_bundle_layout cli_help cli_version cli_invalid PROPERTIES TIMEOUT 30)
     set_tests_properties(cli_help PROPERTIES PASS_REGULAR_EXPRESSION "swapdex install")
     set_tests_properties(cli_version PROPERTIES PASS_REGULAR_EXPRESSION "0\\.2\\.0")
     set_tests_properties(cli_invalid PROPERTIES WILL_FAIL TRUE)

@@ -340,7 +340,7 @@ std::vector<ResetCreditDetail> parse_reset_credits(const Json& value) {
 }
 
 AppServerClient::AppServerClient(std::filesystem::path executable)
-    : executable_(std::move(executable)) {
+    : executable_(executable.empty() ? platform::find_codex_cli_binary() : std::move(executable)) {
     std::signal(SIGPIPE, SIG_IGN);
 }
 

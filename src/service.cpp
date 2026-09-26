@@ -1,12 +1,13 @@
 #include "service.hpp"
 
 #include <array>
+#include <atomic>
 #include <cerrno>
 #include <chrono>
 #include <csignal>
 #include <iostream>
+#include <poll.h>
 #include <pthread.h>
-#include <sys/select.h>
 #include <sys/stat.h>
 #include <thread>
 #include <vector>
@@ -860,38 +861,69 @@ void Service::release_singleton_lock() {
     singleton_lock_.reset();
 }
 
+namespace {
+
+// The signal handler may only do async signal safe work, so it does nothing but poke
+// this pipe. The signal thread does the real work. Using a pipe rather than
+// sigtimedwait or sigwait means the wait always has a timeout, so a stop request can
+// never be missed because no signal happened to arrive.
+std::atomic<int> stop_pipe_write_end{-1};
+
+void handle_stop_signal(int) {
+    const int descriptor = stop_pipe_write_end.load();
+    if (descriptor >= 0) {
+        const char byte = 1;
+        static_cast<void>(::write(descriptor, &byte, 1));
+    }
+}
+
+}
+
 void Service::start_signal_thread() {
-    sigset_t signals;
-    sigemptyset(&signals);
-    sigaddset(&signals, SIGINT);
-    sigaddset(&signals, SIGTERM);
-    if (pthread_sigmask(SIG_BLOCK, &signals, nullptr) != 0) {
+    int descriptors[2] = {-1, -1};
+    if (!platform::make_close_on_exec_pipe(descriptors)) {
+        throw Error("signal_setup_failed", "Unable to create the service shutdown channel");
+    }
+    signal_pipe_read_ = descriptors[0];
+    signal_pipe_write_ = descriptors[1];
+    stop_pipe_write_end.store(descriptors[1]);
+
+    struct sigaction action {};
+    action.sa_handler = handle_stop_signal;
+    sigemptyset(&action.sa_mask);
+    action.sa_flags = SA_RESTART;
+    if (sigaction(SIGINT, &action, nullptr) != 0 || sigaction(SIGTERM, &action, nullptr) != 0) {
+        close_signal_pipe();
         throw Error("signal_setup_failed", "Unable to configure service shutdown handling");
     }
-    signal_thread_ = std::thread([this, signals] {
+
+    signal_thread_ = std::thread([this] {
         while (!stopping_.load()) {
-#if defined(__APPLE__)
-            // macOS has no sigtimedwait. pselect with no file descriptors waits for the
-            // timeout, then sigwait collects the signal that is already pending.
-            timespec interval {};
-            interval.tv_sec = 0;
-            interval.tv_nsec = 250000000L;
-            pselect(0, nullptr, nullptr, nullptr, &interval, nullptr);
-            int signal_number = 0;
-            if (sigwait(&signals, &signal_number) == 0 && (signal_number == SIGINT || signal_number == SIGTERM)) {
+            struct pollfd entry {};
+            entry.fd = signal_pipe_read_;
+            entry.events = POLLIN;
+            const int ready = ::poll(&entry, 1, 250);
+            if (ready > 0) {
+                if ((entry.revents & (POLLIN | POLLHUP | POLLERR)) != 0) {
+                    char drain[64] = {0};
+                    static_cast<void>(::read(signal_pipe_read_, drain, sizeof(drain)));
+                    request_stop();
+                }
+            } else if (ready < 0 && errno != EINTR) {
                 request_stop();
             }
-#else
-            timespec interval {};
-            interval.tv_sec = 0;
-            interval.tv_nsec = 250000000L;
-            const int signal_number = sigtimedwait(&signals, nullptr, &interval);
-            if (signal_number == SIGINT || signal_number == SIGTERM) {
-                request_stop();
-            }
-#endif
         }
     });
+}
+
+void Service::close_signal_pipe() {
+    for (int* descriptor : {&signal_pipe_read_, &signal_pipe_write_}) {
+        if (*descriptor >= 0) {
+            ::close(*descriptor);
+            *descriptor = -1;
+        }
+    }
+    stop_pipe_write_end.store(-1);
 }
 
 void Service::stop_background_threads() {
@@ -905,6 +937,7 @@ void Service::stop_background_threads() {
     if (signal_thread_.joinable()) {
         signal_thread_.join();
     }
+    close_signal_pipe();
 }
 
 }

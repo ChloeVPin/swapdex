@@ -11,6 +11,7 @@ void test_service_control();
 void test_maintenance_schedule();
 void test_service_control_exec();
 void test_platform_layer();
+void test_shutdown_channel_is_interruptible();
 void test_shell_bridge();
 void test_account_root_is_explicit();
 void test_start_reports_the_truth();
@@ -26,6 +27,7 @@ int main(int argc, char** argv) {
         {"maintenance_schedule", test_maintenance_schedule},
         {"service_control_exec", test_service_control_exec},
         {"platform_layer", test_platform_layer},
+        {"shutdown_channel", test_shutdown_channel_is_interruptible},
         {"shell_bridge", test_shell_bridge},
         {"account_root_scope", test_account_root_is_explicit},
         {"start_reports_the_truth", test_start_reports_the_truth},

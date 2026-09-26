@@ -317,10 +317,22 @@ int ServiceControl::uninstall(bool purge_data) {
     }
     const std::unique_ptr<ServiceBackend> backend = make_service_backend(runtime(), runner_);
     if (backend->installed()) {
-        // Always finish the file cleanup, even if the service manager is unreachable.
+        // Always finish the file cleanup, even if the service manager is unreachable,
+        // but never claim success while something is still running. A failed bootout used
+        // to be swallowed, which left a live service with its files deleted.
+        int disable_result = 0;
         try {
-            backend->disable();
-        } catch (const std::exception&) {
+            disable_result = backend->disable();
+        } catch (const std::exception& error) {
+            disable_result = -1;
+            std::string reason = error.what();
+            std::cerr << "swapdex: the service could not be stopped: " << reason << "\n";
+        }
+        const bool stopped = disable_result == 0 && !backend->active();
+        if (!stopped) {
+            std::cerr << "swapdex: the service is still running, so it was not removed.\n";
+            std::cerr << "Run swapdex status, stop it, then uninstall again.\n";
+            return 1;
         }
         remove_registration(*backend);
     }

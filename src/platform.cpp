@@ -1,9 +1,5 @@
 #include "platform.hpp"
 
-#ifndef SWAPDEX_CODEX_BINARY
-#define SWAPDEX_CODEX_BINARY "codex"
-#endif
-
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -431,6 +427,91 @@ std::filesystem::path find_chatgpt_binary() {
     return {};
 }
 
+namespace {
+
+std::vector<std::filesystem::path> path_directories() {
+    std::vector<std::filesystem::path> directories;
+    const std::optional<std::string> value = environment("PATH");
+    if (!value.has_value()) {
+        return directories;
+    }
+    const std::string entries(*value);
+    std::size_t start = 0;
+    while (start <= entries.size()) {
+        const std::size_t end = entries.find(':', start);
+        const std::string piece = entries.substr(start, end == std::string::npos ? std::string::npos : end - start);
+        if (!piece.empty()) {
+            directories.push_back(from_native(piece));
+        }
+        if (end == std::string::npos) {
+            break;
+        }
+        start = end + 1;
+    }
+    return directories;
+}
+
+std::vector<std::filesystem::path> executable_names() {
+#if defined(_WIN32)
+    return {"codex.exe", "codex.cmd"};
+#else
+    return {"codex"};
+#endif
+}
+
+}
+
+std::filesystem::path find_codex_cli_binary() {
+    if (const auto value = environment("SWAPDEX_CODEX_CLI_BINARY"); value.has_value()) {
+        const std::filesystem::path override_path = from_native(*value);
+        std::error_code error;
+        if (std::filesystem::is_regular_file(override_path, error) && !error) {
+            return std::filesystem::absolute(override_path).lexically_normal();
+        }
+    }
+    // Prefer the copy the app itself ships, resolved relative to the app so a layout
+    // change inside the bundle is followed rather than hardcoded. The app is a macOS
+    // bundle on one platform and a plain directory tree on another, so both shapes are
+    // searched, and the app's own copy always wins over whatever is on PATH.
+    const std::filesystem::path app = find_chatgpt_binary();
+    if (!app.empty()) {
+        const std::filesystem::path parent = app.parent_path();
+        std::vector<std::filesystem::path> roots;
+        if (parent.filename() == "MacOS") {
+            roots.push_back(parent.parent_path() / "Resources");
+        } else {
+            roots.push_back(parent / "resources");
+            roots.push_back(parent);
+        }
+        const std::vector<std::filesystem::path> layouts = {
+            std::filesystem::path("codex-cli") / "CodexCLI.app" / "Contents" / "MacOS" / "codex",
+            std::filesystem::path("codex-cli") / "bin" / "codex",
+            std::filesystem::path("codex"),
+            std::filesystem::path("bin") / "codex",
+        };
+        for (const std::filesystem::path& root : roots) {
+            for (const std::filesystem::path& layout : layouts) {
+                const std::filesystem::path candidate = root / layout;
+                std::error_code error;
+                if (std::filesystem::is_regular_file(candidate, error) && !error) {
+                    return std::filesystem::absolute(candidate).lexically_normal();
+                }
+            }
+        }
+    }
+    // Fall back to whatever is on PATH.
+    for (const std::filesystem::path& directory : path_directories()) {
+        for (const std::filesystem::path& name : executable_names()) {
+            const std::filesystem::path candidate = directory / name;
+            std::error_code error;
+            if (std::filesystem::is_regular_file(candidate, error) && !error) {
+                return std::filesystem::absolute(candidate).lexically_normal();
+            }
+        }
+    }
+    return {};
+}
+
 bool matches_chatgpt_binary(const std::filesystem::path& path) {
     if (path.empty()) {
         return false;
@@ -786,6 +867,14 @@ bool make_close_on_exec_pipe(int descriptors[2]) {
         }
     }
     return true;
+#endif
+}
+
+unsigned long current_user_id() {
+#if defined(_WIN32)
+    return 0U;
+#else
+    return static_cast<unsigned long>(::getuid());
 #endif
 }
 
