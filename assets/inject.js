@@ -2678,6 +2678,13 @@
   // injected at all rather than a visible error.
   applyChatBackground();
 
+  // Re-ask for the picture on every start. The picture itself is not kept here, so a
+  // fresh instance of this script, which is what a reload produces, would otherwise sit
+  // blank until the service happened to push state for some other reason.
+  if (chatBackgroundEnabled && chatBackgroundPath) {
+    enqueue({ v: 1, source: "profile-dropdown", action: "chat-background", path: chatBackgroundPath });
+  }
+
   const observer = new MutationObserver(schedule);
   observer.observe(document.documentElement, { childList: true, subtree: true });
   window.addEventListener("load", schedule, { once: true });

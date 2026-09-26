@@ -424,6 +424,13 @@ bool Service::attach_window(const nlohmann::json& target) {
         if (primary_session_.empty() || target.value("url", std::string()).find("index.html") != std::string::npos) {
             primary_session_ = session;
         }
+        // Push the current state to a window as soon as it is ready. Without this a
+        // window that reloads, which is what opening the settings and coming back does,
+        // starts up knowing nothing and stays blank until the next periodic refresh
+        // happens to push a snapshot.
+        if (!transitioning_.load()) {
+            send_snapshot();
+        }
         return true;
     } catch (const std::exception& error) {
         std::fputs(("swapdex: a Codex window could not be attached: " + std::string(error.what()) + "\n").c_str(), stderr);
