@@ -96,7 +96,7 @@ Please read this before you install it.
 | Platform | Builds and passes tests | Tested against a real signed in app | How it starts |
 | --- | --- | --- | --- |
 | Linux | yes, in CI and on this machine | yes, daily | a systemd user service |
-| macOS | yes, in CI and on a real Mac | in progress, a QA pass found and fixed several defects | a launchd agent |
+| macOS | yes, in CI and on a real Mac | yes, verified on a signed in account | a launchd agent |
 | Windows | **no, does not compile yet** | no | a login item |
 
 Linux is the only platform with an end to end test against a signed in app, so that is

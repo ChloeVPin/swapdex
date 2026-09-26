@@ -5,6 +5,7 @@
 #include <cerrno>
 #include <chrono>
 #include <csignal>
+#include <cstdio>
 #include <iostream>
 #include <poll.h>
 #include <pthread.h>
@@ -909,6 +910,11 @@ void Service::remove_profile(const std::string& id) {
 }
 
 void Service::report_error(std::string message) {
+    // Always reach the service log first. The renderer is the wrong place to discover a
+    // problem, because the most likely time to have one is before a renderer exists,
+    // and then the message went nowhere at all.
+    std::fputs(("swapdex: " + message + "\n").c_str(), stderr);
+    std::fflush(stderr);
     const std::string primary = primary_session_id();
     if (!cdp_.has_value() || !cdp_->running() || primary.empty()) {
         return;
