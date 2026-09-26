@@ -473,6 +473,13 @@
       html[data-swapdex-chat-background="on"] [data-swapdex-chat-content="true"] > div {
         background-color: transparent !important;
       }
+      /* The bar across the top keeps the colour the app gave it. The value is read
+         from the running app and handed back through a custom property, because
+         guessing a system colour here matched nothing: Canvas resolves to white while
+         the app is dark, and to black while it is light. */
+      html[data-swapdex-chat-background="on"] [data-swapdex-chat-toolbar="true"] {
+        background-color: var(--swapdex-toolbar-surface, transparent) !important;
+      }
       /* Message bubbles keep their own background so text stays readable. */
       html[data-swapdex-chat-background="on"] [data-swapdex-chat-bubble] {
         background-color: rgba(0, 0, 0, 0.55) !important;
@@ -501,6 +508,25 @@
   // toolbar inside the app's main region. Marking more than this is what broke the app,
   // because the earlier version marked the document, the app root, the fixed wrapper
   // and every child, and stripped background images from all of them.
+  // The bar across the top of the app. It is the sibling of the content column, and
+  // it is given an opaque surface of its own so the picture never reaches it.
+  const findChatToolbar = () => {
+    for (const main of Array.from(document.querySelectorAll("main"))) {
+      const mainRect = main.getBoundingClientRect();
+      if (mainRect.width < 200 || mainRect.height < 200) {
+        continue;
+      }
+      for (const child of Array.from(main.children)) {
+        const rect = child.getBoundingClientRect();
+        const isToolbar = rect.height > 0 && rect.height < 120 && rect.top < 80;
+        if (isToolbar && getComputedStyle(child).position !== "fixed") {
+          return child;
+        }
+      }
+    }
+    return null;
+  };
+
   const findChatContent = () => {
     for (const main of Array.from(document.querySelectorAll("main"))) {
       const mainRect = main.getBoundingClientRect();
@@ -521,6 +547,7 @@
   };
 
   let chatContentCache = null;
+  let chatToolbarCache = null;
   const markChatSurfaces = () => {
     if (chatContentCache !== null && chatContentCache.isConnected) {
       return;
@@ -529,10 +556,19 @@
       chatContentCache.removeAttribute("data-swapdex-chat-content");
       chatContentCache = null;
     }
+    if (chatToolbarCache !== null) {
+      chatToolbarCache.removeAttribute("data-swapdex-chat-toolbar");
+      chatToolbarCache = null;
+    }
     const found = findChatContent();
     if (found !== null) {
       found.setAttribute("data-swapdex-chat-content", "true");
       chatContentCache = found;
+    }
+    const toolbar = findChatToolbar();
+    if (toolbar !== null) {
+      toolbar.setAttribute("data-swapdex-chat-toolbar", "true");
+      chatToolbarCache = toolbar;
     }
   };
 
@@ -546,9 +582,30 @@
     });
   };
 
+  // Reads the colour the app actually paints the top bar with, before any of our own
+  // rules are in effect, and offers it back as a custom property. A theme can change
+  // at any time, so this is re-read whenever the background is applied.
+  const rememberToolbarSurface = () => {
+    const toolbar = chatToolbarCache;
+    if (!(toolbar instanceof HTMLElement) || !toolbar.isConnected) {
+      return;
+    }
+    let colour = "";
+    try {
+      colour = getComputedStyle(toolbar).backgroundColor;
+    } catch {
+      return;
+    }
+    // Fully transparent means the app intends to show whatever is behind it, which is
+    // its own window background and not our picture, so nothing needs forcing.
+    const opaque = colour && colour !== "transparent" && !/rgba\(\s*0\s*,\s*0\s*,\s*0\s*,\s*0\s*\)/.test(colour);
+    document.documentElement.style.setProperty("--swapdex-toolbar-surface", opaque ? colour : "transparent");
+  };
+
   const paintChatBackground = () => {
     installChatBackgroundStyles();
     const root = document.documentElement;
+    rememberToolbarSurface();
     const wanted = chatBackgroundEnabled && chatBackgroundDataUrl ? "on" : "off";
     root.setAttribute("data-swapdex-chat-background", wanted);
     markChatSurfaces();
