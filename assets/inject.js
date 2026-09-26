@@ -491,17 +491,14 @@
         mask-image: linear-gradient(to top, #000 0%, #000 34%, rgba(0,0,0,0.55) 62%, transparent 100%);
       }
       html[data-swapdex-composer-scrim="on"] #${composerScrimId} { display: block; }
-      /* Transparent surfaces let the image through. The app paints its background on the
-         outermost elements, so the document, the app root and the marked panes all have
-         to give it up. Anything the app paints with a background image is removed, and
-         only colour, so no iconography is lost. */
-      html[data-swapdex-chat-background="on"] body,
-      html[data-swapdex-chat-background="on"] #root,
-      html[data-swapdex-chat-background="on"] [data-swapdex-chat-surface],
-      html[data-swapdex-chat-background="on"] [data-swapdex-chat-surface] > div,
-      html[data-swapdex-chat-background="on"] [data-swapdex-chat-surface] main {
+      /* Exactly one element gives up its background: the column the messages live in.
+         An earlier version of this reached for the document, the app root, every child
+         of the pane and every fixed wrapper, and removed background images from all of
+         them. That broke the app, so the rule is now deliberately narrow. Only the
+         colour is touched, never background-image, so nothing that draws with an image
+         loses it. */
+      html[data-swapdex-chat-background="on"] [data-swapdex-chat-content="true"] {
         background-color: transparent !important;
-        background-image: none !important;
       }
       /* The sidebar keeps its own background so it stays readable over any picture. */
       html[data-swapdex-chat-background="on"] nav.sidebar-navigation,
@@ -523,59 +520,42 @@
   // has found the chat pane. Scanning every element and measuring it forces a layout
   // per element, which on the real app took long enough to time out the injection
   // entirely, so the walk is bounded and the answer is cached.
-  const findChatSurfaces = () => {
-    const found = [];
-    const add = element => {
-      if (element instanceof HTMLElement && element.isConnected && !found.includes(element)) {
-        found.push(element);
-      }
-    };
-    // The app paints the chat area inside its main region: a toolbar header, and below
-    // it the content column. Those are marked, plus the fixed wrapper above them, and
-    // anything fixed is skipped because those are overlays such as toasts and menus,
-    // which are not the chat and would be pointless to make transparent.
-    const isOverlay = element => {
-      const position = getComputedStyle(element).position;
-      return position === "fixed" || position === "sticky";
-    };
-    const large = (element, minHeight) => {
-      const rect = element.getBoundingClientRect();
-      return rect.width > 200 && rect.height > minHeight;
-    };
+  // One element only: the column the messages live in, which is the sibling of the
+  // toolbar inside the app's main region. Marking more than this is what broke the app,
+  // because the earlier version marked the document, the app root, the fixed wrapper
+  // and every child, and stripped background images from all of them.
+  const findChatContent = () => {
     for (const main of Array.from(document.querySelectorAll("main"))) {
-      if (!large(main, 200)) {
+      const mainRect = main.getBoundingClientRect();
+      if (mainRect.width < 200 || mainRect.height < 200) {
         continue;
       }
-      add(main);
       for (const child of Array.from(main.children)) {
-        // The header is the toolbar across the top, not the area behind the messages.
         const rect = child.getBoundingClientRect();
-        const looksLikeToolbar = rect.height > 0 && rect.height < 120 && rect.top < 80;
-        if (!looksLikeToolbar && !isOverlay(child) && large(child, 120)) {
-          add(child);
+        // The toolbar is a short strip across the top, not the area behind messages.
+        const isToolbar = rect.height > 0 && rect.height < 120 && rect.top < 80;
+        const isOverlay = getComputedStyle(child).position === "fixed";
+        if (!isToolbar && !isOverlay && rect.width > 200 && rect.height > 120) {
+          return child;
         }
       }
     }
-    for (const wrapper of Array.from(document.querySelectorAll("div.fixed.inset-0"))) {
-      if (large(wrapper, 200) && wrapper.querySelector("main")) {
-        add(wrapper);
-      }
-    }
-    return found.slice(0, 4);
+    return null;
   };
 
-  let chatSurfaceCache = [];
+  let chatContentCache = null;
   const markChatSurfaces = () => {
-    const stillGood = chatSurfaceCache.length > 0 && chatSurfaceCache.every(element => element.isConnected);
-    if (stillGood) {
+    if (chatContentCache !== null && chatContentCache.isConnected) {
       return;
     }
-    for (const element of chatSurfaceCache) {
-      element.removeAttribute("data-swapdex-chat-surface");
+    if (chatContentCache !== null) {
+      chatContentCache.removeAttribute("data-swapdex-chat-content");
+      chatContentCache = null;
     }
-    chatSurfaceCache = findChatSurfaces();
-    for (const element of chatSurfaceCache) {
-      element.setAttribute("data-swapdex-chat-surface", "true");
+    const found = findChatContent();
+    if (found !== null) {
+      found.setAttribute("data-swapdex-chat-content", "true");
+      chatContentCache = found;
     }
   };
 
@@ -614,7 +594,7 @@
     try {
       const painted = layer.style.backgroundImage !== "" && getComputedStyle(layer).display !== "none";
       const visible = painted ? getComputedStyle(layer).backgroundImage !== "none" : false;
-      const count = chatSurfaceCache.length;
+      const count = chatContentCache !== null && chatContentCache.isConnected ? 1 : 0;
       // Report whether it painted. Whether a background shows is otherwise invisible
       // from the service, and it is the first question anyone asks. Reported once per
       // distinct outcome so it does not repeat on every pass.
@@ -676,7 +656,7 @@
       changed = true;
     }
     if (changed || !chatBackgroundApplied) {
-      chatSurfaceCache = [];
+      chatContentCache = null;
       applyChatBackground();
     }
   };
@@ -2660,7 +2640,7 @@
     // still on its startup loader. Re-checking as the app boots is what makes the
     // background attach to the real layout instead of nothing.
     markChatSurfaces();
-    if (chatSurfaceCache.length > 0) {
+    if (chatContentCache !== null && chatContentCache.isConnected) {
       applyChatBackground();
     }
     reconcileSettings();
