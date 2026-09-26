@@ -284,6 +284,28 @@ Json require_result(const Json& response) {
     return response.at("result");
 }
 
+// Compares two paths for identity rather than spelling, so a symlinked or relative
+// spelling of the same directory is not treated as a different one.
+bool same_path(const std::string& reported, const std::filesystem::path& expected) {
+    std::error_code error;
+    std::filesystem::path left(reported);
+    std::filesystem::path right(expected);
+    if (std::filesystem::is_directory(left, error) && !error) {
+        left = std::filesystem::weakly_canonical(left, error);
+    }
+    if (error) {
+        left = std::filesystem::path(reported).lexically_normal();
+    }
+    error.clear();
+    if (std::filesystem::is_directory(right, error) && !error) {
+        right = std::filesystem::weakly_canonical(right, error);
+    }
+    if (error) {
+        right = std::filesystem::absolute(expected).lexically_normal();
+    }
+    return left == right;
+}
+
 Json require_account_result(const Json& response) {
     try {
         return require_result(response);
@@ -352,7 +374,10 @@ AppServerSnapshot AppServerClient::query(const std::filesystem::path& codex_home
     initialize_params["clientInfo"] = {{"name", "swapdex"}, {"title", "Swapdex"}, {"version", SWAPDEX_VERSION}};
     initialize_params["capabilities"] = {{"experimentalApi", true}, {"optOutNotificationMethods", Json::array({"remoteControl/status/changed"})}};
     const Json initialized = require_result(process.request(1, "initialize", initialize_params, deadline));
-    if (!initialized.contains("codexHome") || initialized.at("codexHome").get<std::string>() != codex_home.string()) {
+    // The app server reports a canonical path, which differs from ours whenever the path
+    // we passed went through a symlink. macOS resolves /tmp to /private/tmp, so a plain
+    // string compare rejected the very home it had just been given.
+    if (!initialized.contains("codexHome") || !same_path(initialized.at("codexHome").get<std::string>(), codex_home)) {
         throw Error("app_server_home_mismatch", "The app-server initialized an unexpected account home");
     }
     process.notify("initialized");
