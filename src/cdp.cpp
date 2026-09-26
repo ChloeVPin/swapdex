@@ -194,14 +194,33 @@ nlohmann::json CdpPipe::request(const std::string& method, const nlohmann::json&
         throw Error("cdp_timeout", "The browser control request exceeded its deadline");
     }
     if (response.contains("error")) {
-        throw Error("cdp_rpc", "The browser control request was rejected");
+        // Carry what the browser said, otherwise a rejection is unactionable.
+        std::string detail;
+        try {
+            detail = response.at("error").value("message", std::string());
+        } catch (const std::exception&) {
+        }
+        throw Error("cdp_rpc", "The browser control request was rejected" + (detail.empty() ? "" : ": " + detail));
     }
     if (!response.contains("result")) {
         throw Error("cdp_protocol", "The browser returned an invalid control response");
     }
     const nlohmann::json& result = response.at("result");
     if (result.is_object() && result.contains("exceptionDetails") && !result.at("exceptionDetails").is_null()) {
-        throw Error("cdp_rpc", "The browser control evaluation failed");
+        // The exception text is the only thing that says what went wrong in the page.
+        std::string detail;
+        try {
+            const nlohmann::json& details = result.at("exceptionDetails");
+            detail = details.value("text", std::string());
+            const nlohmann::json exception = details.value("exception", nlohmann::json::object());
+            const std::string description = exception.value("description", std::string());
+            if (!description.empty()) {
+                const std::size_t newline = description.find('\n');
+                detail += ": " + description.substr(0, newline == std::string::npos ? description.size() : newline);
+            }
+        } catch (const std::exception&) {
+        }
+        throw Error("cdp_rpc", "The browser control evaluation failed" + (detail.empty() ? "" : ": " + detail));
     }
     return result;
 }

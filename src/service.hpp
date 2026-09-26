@@ -25,6 +25,10 @@ std::vector<std::string> app_page_target_ids(const nlohmann::json& targets);
 
 namespace service_detail {
 
+// Which content type an image path claims, or nothing if it is not a type a browser
+// paints. Exposed so the rule can be tested.
+std::optional<std::string> background_mime_type(const std::filesystem::path& path);
+
 
 constexpr bool should_run_maintenance(bool first_cycle, bool request_pending, bool enabled) {
     return request_pending || (first_cycle && enabled);
@@ -63,6 +67,16 @@ private:
     void maintain_accounts(const std::optional<std::string>& target_id);
     void launch_onboarding(const std::string& id, bool reauthenticate = false);
     // True once an account has credentials on disk, which is what actually ends a sign-in.
+    // The chat background lives here rather than in the account store, because it is a
+    // look preference rather than anything to do with an account.
+    void set_chat_background(const nlohmann::json& request);
+    void clear_chat_background();
+    bool chat_background(std::string& data_url, std::string& source) const;
+    mutable std::mutex background_mutex_;
+    std::string chat_background_data_url_;
+    std::string chat_background_source_;
+    std::atomic<bool> background_dirty_{false};
+
     bool credential_present(const std::string& id);
     void switch_profile(const std::string& id);
     void remove_profile(const std::string& id);

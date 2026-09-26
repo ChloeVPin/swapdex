@@ -282,6 +282,16 @@ void Service::handle_ui_payload(const std::string& payload) {
         launch_onboarding(id, true);
         return;
     }
+    if (action == "renderer-error") {
+        const std::string scope = request.value("scope", std::string("renderer"));
+        const std::string text = request.value("text", std::string("unknown failure"));
+        report_error("the interface hit an error in " + scope + ": " + text);
+        return;
+    }
+    if (action == "chat-background") {
+        set_chat_background(request);
+        return;
+    }
     if (action == "maintenance-config") {
         if (!request.contains("enabled") || !request.at("enabled").is_boolean() || !request.contains("interval_hours") || !request.at("interval_hours").is_number_integer()) {
             return;
@@ -388,6 +398,10 @@ bool Service::attach_window(const nlohmann::json& target) {
         const bool ok = verification.contains("result") && verification.at("result").is_object() && verification.at("result").contains("value")
             && verification.at("result").at("value").is_boolean() && verification.at("result").at("value").get<bool>();
         if (!ok) {
+            // Say why, because a silent failure here looks exactly like a healthy
+            // service that simply never attaches.
+            std::fputs(("swapdex: the interface did not load in a Codex window: " + std::string(injection_source().empty() ? "no asset" : "asset present but rejected") + "\n").c_str(), stderr);
+            std::fflush(stderr);
             return false;
         }
         const std::lock_guard<std::mutex> lock(sessions_mutex_);
@@ -398,7 +412,9 @@ bool Service::attach_window(const nlohmann::json& target) {
             primary_session_ = session;
         }
         return true;
-    } catch (const std::exception&) {
+    } catch (const std::exception& error) {
+        std::fputs(("swapdex: a Codex window could not be attached: " + std::string(error.what()) + "\n").c_str(), stderr);
+        std::fflush(stderr);
         return false;
     }
 }
@@ -519,6 +535,12 @@ void Service::send_snapshot_to(const std::string& session) {
     nlohmann::json payload = nlohmann::json::object();
     payload["v"] = 1;
     payload["active"] = active.has_value() ? active->id : "";
+    std::string background_data;
+    std::string background_path;
+    if (chat_background(background_data, background_path)) {
+        payload["chatBackground"] = background_data;
+        payload["chatBackgroundSource"] = background_path;
+    }
     payload["profiles"] = nlohmann::json::array();
     for (const ProfileRecord& record : store_->list()) {
         nlohmann::json item = nlohmann::json::object();
@@ -796,6 +818,115 @@ void Service::launch_onboarding(const std::string& id, bool reauthenticate) {
         report_error(reauthenticate ? "The account could not be re-authenticated" : "The new profile was created but sign-in was not completed");
         send_snapshot();
     }
+}
+
+namespace service_detail {
+
+// Images are turned into a data URL by the service, because the interface runs inside
+// the app and cannot read the user's files. Only formats a browser can paint are
+// accepted, and the size is capped so a huge image cannot exhaust memory.
+constexpr std::size_t maximum_background_bytes = 4U * 1024U * 1024U;
+
+std::optional<std::string> background_mime_type(const std::filesystem::path& path) {
+    std::string extension = path.extension().string();
+    for (char& character : extension) {
+        character = static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
+    }
+    if (extension == ".png") {
+        return "image/png";
+    }
+    if (extension == ".jpg" || extension == ".jpeg") {
+        return "image/jpeg";
+    }
+    if (extension == ".webp") {
+        return "image/webp";
+    }
+    if (extension == ".gif") {
+        return "image/gif";
+    }
+    return std::nullopt;
+}
+
+}
+
+void Service::set_chat_background(const nlohmann::json& request) {
+    if (!request.contains("path")) {
+        clear_chat_background();
+        return;
+    }
+    if (!request.at("path").is_string()) {
+        report_error("That is not a usable image path");
+        return;
+    }
+    const std::string raw = request.at("path").get<std::string>();
+    if (raw.empty()) {
+        clear_chat_background();
+        return;
+    }
+    const std::filesystem::path path(raw);
+    std::error_code error;
+    if (!path.is_absolute()) {
+        report_error("Use the full path to the image, starting with /");
+        return;
+    }
+    const std::optional<std::string> mime = service_detail::background_mime_type(path);
+    if (!mime.has_value()) {
+        report_error("That image type is not supported. Use a PNG, JPEG, WebP or GIF.");
+        return;
+    }
+    if (std::filesystem::is_symlink(path, error) || error || !std::filesystem::is_regular_file(path, error) || error) {
+        report_error("No image was found at that path");
+        return;
+    }
+    const std::uintmax_t size = std::filesystem::file_size(path, error);
+    if (error || size == 0U || size > service_detail::maximum_background_bytes) {
+        report_error("That image is empty or larger than 4 MB");
+        return;
+    }
+    std::string bytes;
+    try {
+        bytes = read_file(path, service_detail::maximum_background_bytes);
+    } catch (const std::exception&) {
+        report_error("That image could not be read");
+        return;
+    }
+    static constexpr char table[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string encoded;
+    encoded.reserve(((bytes.size() + 2U) / 3U) * 4U);
+    for (std::size_t index = 0; index < bytes.size(); index += 3U) {
+        const std::size_t remaining = bytes.size() - index;
+        const unsigned int first = static_cast<unsigned char>(bytes[index]);
+        const unsigned int second = remaining > 1U ? static_cast<unsigned char>(bytes[index + 1U]) : 0U;
+        const unsigned int third = remaining > 2U ? static_cast<unsigned char>(bytes[index + 2U]) : 0U;
+        encoded.push_back(table[first >> 2U]);
+        encoded.push_back(table[((first & 0x03U) << 4U) | (second >> 4U)]);
+        encoded.push_back(remaining > 1U ? table[((second & 0x0FU) << 2U) | (third >> 6U)] : '=');
+        encoded.push_back(remaining > 2U ? table[third & 0x3FU] : '=');
+    }
+    const std::string data_url = "data:" + *mime + ";base64," + encoded;
+    const std::lock_guard<std::mutex> lock(background_mutex_);
+    if (data_url != chat_background_data_url_) {
+        chat_background_data_url_ = data_url;
+    }
+    chat_background_source_ = path.string();
+    background_dirty_.store(true);
+    report_status("Chat background updated");
+    send_snapshot();
+}
+
+void Service::clear_chat_background() {
+    const std::lock_guard<std::mutex> lock(background_mutex_);
+    chat_background_data_url_.clear();
+    chat_background_source_.clear();
+    background_dirty_.store(true);
+    send_snapshot();
+}
+
+bool Service::chat_background(std::string& data_url, std::string& source) const {
+    const std::lock_guard<std::mutex> lock(background_mutex_);
+    data_url = chat_background_data_url_;
+    source = chat_background_source_;
+    return !data_url.empty();
 }
 
 bool Service::credential_present(const std::string& id) {

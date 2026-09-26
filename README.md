@@ -23,6 +23,8 @@ the accounts page.
 **A settings page with the useful tabs.** Privacy blurs your account names everywhere
 they appear. Accounts lists everything you have stored. Menu lets you hide the rows in
 the profile menu you never use, while Add account and Settings always stay visible.
+Appearance lets you put your own image behind the chat area, and fades a blur upward
+from the bottom so the message box stays readable over any picture.
 
 **Safe removal.** Removing an account always asks you to confirm first. A secondary
 account is deleted with its stored credentials and Codex keeps running. Removing the
