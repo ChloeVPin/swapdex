@@ -58,6 +58,7 @@ public:
     int start(bool close_app = false);
     int stop();
     int status();
+    int doctor();
     int uninstall(bool purge_data = false);
 
 private:

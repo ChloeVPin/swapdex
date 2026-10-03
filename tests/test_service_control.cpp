@@ -157,6 +157,7 @@ void test_service_control() {
         swapdex::test::check(!std::filesystem::exists(registration), "Uninstall left the service registration behind");
     }
     swapdex::test::check(std::filesystem::exists(paths.state_root / "registry.json"), "Normal uninstall removed account data");
+    swapdex::test::check(control.doctor() != 0, "The health check passed on an uninstalled add-on");
 
     paths = test_paths(root / "purge");
     swapdex::ServiceControl purge_control(paths, runner);

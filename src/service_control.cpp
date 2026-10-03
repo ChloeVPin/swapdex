@@ -345,6 +345,104 @@ int ServiceControl::status() {
     return backend->status();
 }
 
+int ServiceControl::doctor() {
+    // A health check a user can paste into a bug report: every line says what was
+    // looked at and what to do about it, and the exit code counts real failures.
+    std::cout << "swapdex " << SWAPDEX_VERSION << "\n";
+    int failures = 0;
+    int warnings = 0;
+    const auto ok = [](const std::string& text) { std::cout << "ok    " << text << "\n"; };
+    const auto warn = [&warnings](const std::string& text) {
+        ++warnings;
+        std::cout << "warn  " << text << "\n";
+    };
+    const auto fail = [&failures](const std::string& text) {
+        ++failures;
+        std::cout << "fail  " << text << "\n";
+    };
+
+    const std::unique_ptr<ServiceBackend> backend = make_service_backend(runtime(), runner_);
+
+    if (path_entry_exists(paths_.installed_executable)) {
+        ok("binary installed at " + paths_.installed_executable.string());
+    } else {
+        fail("no installed binary at " + paths_.installed_executable.string() + "; run swapdex install");
+    }
+
+    if (path_entry_exists(paths_.installed_asset)) {
+        // A stale interface asset leaves the service injecting an old build, so
+        // drift from the asset beside this binary is a warning rather than trivia.
+        if (path_entry_exists(paths_.source_asset) && read_file(paths_.installed_asset, 4U << 20) != read_file(paths_.source_asset, 4U << 20)) {
+            warn("the installed interface differs from this build; rerun the installer");
+        } else {
+            ok("interface asset installed");
+        }
+    } else {
+        fail("no installed interface at " + paths_.installed_asset.string() + "; run swapdex install");
+    }
+
+    if (backend->installed()) {
+        ok("service registered with " + backend->id());
+    } else {
+        fail("the service is not registered; run swapdex install");
+    }
+
+    if (backend->active()) {
+        ok("service running");
+    } else if (backend->installed()) {
+        warn("the service is installed but not running; run swapdex start");
+    }
+
+    if (path_entry_exists(paths_.state_root)) {
+        const std::filesystem::perms exposed = std::filesystem::status(paths_.state_root).permissions() & (std::filesystem::perms::group_all | std::filesystem::perms::others_all);
+        if (exposed == std::filesystem::perms::none) {
+            ok("account data directory is private");
+        } else {
+            warn("account data directory " + paths_.state_root.string() + " is readable by other users");
+        }
+    }
+
+    const std::filesystem::path app = platform::find_chatgpt_binary();
+    if (!app.empty()) {
+        ok("Codex found at " + app.string());
+    } else {
+        fail("the Codex app was not found; install it and sign in first");
+    }
+
+    if (const auto foreign = app_probe_.running_unmanaged(); foreign.has_value()) {
+        if (platform::chatgpt_process_is_managed(*foreign)) {
+            ok("a managed Codex is running (pid " + std::to_string(*foreign) + ")");
+        } else {
+            warn("a Codex opened outside Swapdex is running; the service adopts it on its next check");
+        }
+    } else {
+        ok("no stray Codex process");
+    }
+
+    // The service does not care where its binary lives, but the commands do.
+    bool on_path = false;
+    const std::string wanted = paths_.installed_executable.parent_path().string();
+    if (const auto path = environment_value("PATH"); path.has_value()) {
+        const std::string directories = *path + ":";
+        for (std::size_t position = 0; position < directories.size();) {
+            const std::size_t colon = directories.find(':', position);
+            if (directories.substr(position, colon - position) == wanted) {
+                on_path = true;
+                break;
+            }
+            position = colon + 1;
+        }
+    }
+    if (on_path) {
+        ok("swapdex is on PATH");
+    } else {
+        warn(wanted + " is not on PATH; the swapdex command will not resolve there");
+    }
+
+    std::cout << failures << " failure(s), " << warnings << " warning(s)\n";
+    return failures == 0 ? 0 : 1;
+}
+
 int ServiceControl::uninstall(bool purge_data) {
     ensure_private_directory(paths_.lock_file.parent_path());
     const platform::InstanceLock lock(paths_.lock_file);

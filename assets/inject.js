@@ -30,6 +30,8 @@
     { id: "cme", labels: ["CME"], title: "CME", description: "Show the CME action when available." },
     { id: "invite", labels: ["Invite a friend", "Invite a coworker"], title: "Invite", description: "Show the invitation action when available." },
     { id: "pet", labels: ["Show pet", "Hide pet"], title: "Pet", description: "Show the pet action when available." },
+    { id: "mini", labels: ["Show Mini", "Hide Mini"], title: "Mini window", description: "Show the mini-window shortcut when available." },
+    { id: "help", labels: ["Help"], title: "Help", description: "Show the help action when available." },
     { id: "logout", labels: ["Log out"], title: "Log out", description: "Show the native sign-out action." }
   ];
   const optionalMenuIds = new Set(optionalMenuItems.map(item => item.id));
@@ -293,7 +295,7 @@
   };
 
   const accountAvatarInitial = profile => {
-    const value = normalize(profile?.email || profile?.label || "A");
+    const value = normalize(profile?.label || profile?.email || "A");
     return (Array.from(value)[0] || "A").toUpperCase();
   };
   const applySettingsAvatar = (container, profile) => {
@@ -693,13 +695,29 @@
   };
 
   const remaining = value => Number.isFinite(value) ? `${Math.max(0, Math.min(100, Math.round(value)))}%` : "—";
+  // Free plans only carry a monthly pool while paid plans also get a five hour
+  // window, so the tag has to come from the window's own duration rather than a
+  // fixed primary/secondary naming scheme.
+  const usageWindowLabel = (minutes, fallback) => {
+    const value = Number(minutes);
+    if (!Number.isFinite(value) || value <= 0) {
+      return fallback;
+    }
+    if (value % 43200 === 0) {
+      return `${value / 43200}mo`;
+    }
+    if (value % 1440 === 0) {
+      return `${value / 1440}d`;
+    }
+    return `${value % 60 === 0 ? value / 60 : Math.max(1, Math.round(value / 60))}h`;
+  };
   const usageParts = profile => {
     const parts = [];
     if (Number.isFinite(profile.primary_remaining)) {
-      parts.push(`5h ${remaining(profile.primary_remaining)}`);
+      parts.push(`${usageWindowLabel(profile.primary_duration_minutes, "5h")} ${remaining(profile.primary_remaining)}`);
     }
     if (Number.isFinite(profile.secondary_remaining)) {
-      parts.push(`7d ${remaining(profile.secondary_remaining)}`);
+      parts.push(`${usageWindowLabel(profile.secondary_duration_minutes, "7d")} ${remaining(profile.secondary_remaining)}`);
     }
     return parts;
   };
@@ -835,14 +853,14 @@
     rememberAvatar(snapshot.active, owner);
     const activeProfile = Array.isArray(snapshot.profiles) ? snapshot.profiles.find(profile => profile && profile.id === snapshot.active) : null;
     if (activeProfile) {
-      setOwnerRowText(owner, normalize(activeProfile.email || activeProfile.label || "Account"), profileUsageDetail(activeProfile));
+      setOwnerRowText(owner, normalize(activeProfile.label || activeProfile.email || "Account"), profileUsageDetail(activeProfile));
     }
     applyProfileMenuUsage(owner, activeProfile);
     applyNativeMenuVisibility(identified);
     const others = Array.isArray(snapshot.profiles)
       ? snapshot.profiles.filter(profile => profile.id !== snapshot.active && profile.authenticated !== false)
       : [];
-    const signature = JSON.stringify(others.map(profile => [profile.id, profile.email || profile.label || "Account", profile.plan, ...usageParts(profile), storedAvatar(profile.id)]));
+    const signature = JSON.stringify(others.map(profile => [profile.id, profile.label || profile.email || "Account", profile.plan, ...usageParts(profile), storedAvatar(profile.id)]));
     const accountRows = Array.from(menu.querySelectorAll('[data-swapdex-row="account"]'));
     const addRows = Array.from(menu.querySelectorAll('[data-swapdex-row="add"]'));
     const ownerStructure = elementStructure(owner);
@@ -862,7 +880,7 @@
       row.setAttribute("data-swapdex-row", "account");
       row.setAttribute("data-swapdex-action", "switch");
       row.setAttribute("data-swapdex-key", String(profile.id));
-      const identity = normalize(profile.email || profile.label || "Account");
+      const identity = normalize(profile.label || profile.email || "Account");
       const detail = profileUsageDetail(profile);
       if (!setOwnerRowText(row, identity, detail)) {
         return;
@@ -968,6 +986,10 @@
     const percent = usagePercent(value);
     const fill = meter.querySelector("[data-swapdex-usage-fill]");
     const text = meter.querySelector("[data-swapdex-usage-value]");
+    const meterLabel = meter.querySelector(".swapdex-usage-label");
+    if (meterLabel instanceof HTMLElement) {
+      setElementText(meterLabel, label);
+    }
     meter.hidden = percent === null;
     if (percent === null || !(fill instanceof HTMLElement) || !(text instanceof HTMLElement)) {
       return false;
@@ -1047,13 +1069,14 @@
       advice.hidden = adviceText.length === 0;
     }
     let visible = false;
-    for (const [key, property] of [["primary", "primary_remaining"], ["secondary", "secondary_remaining"]]) {
+    for (const [key, property, duration, fallback] of [["primary", "primary_remaining", "primary_duration_minutes", "5h"], ["secondary", "secondary_remaining", "secondary_duration_minutes", "7d"]]) {
       const meter = usage.querySelector(`[data-swapdex-profile-usage-meter="${key}"]`);
       const fill = meter?.querySelector("[data-swapdex-profile-usage-fill]");
       const percent = usagePercent(profile?.[property]);
       if (!(meter instanceof HTMLElement) || !(fill instanceof HTMLElement)) {
         continue;
       }
+      meter.dataset.swapdexProfileUsageLabel = usageWindowLabel(profile?.[duration], fallback);
       meter.hidden = percent === null;
       if (percent !== null) {
         fill.style.width = `${percent}%`;
@@ -1186,11 +1209,28 @@
     (document.head || document.documentElement).append(style);
   };
 
+  // A scrollable ancestor means the element just inside it is the page root, which
+  // is what gets hidden when the Swapdex page opens.
+  const scrollHost = element => {
+    if (!(element instanceof HTMLElement)) {
+      return false;
+    }
+    return /(auto|scroll|overlay)/.test(getComputedStyle(element).overflowY) || element.scrollHeight > element.clientHeight;
+  };
+
   const findSettingsContext = () => {
     if (!supportedLanguage) {
       return null;
     }
-    const sidebarButton = label => Array.from(document.querySelectorAll(`button.sidebar-item[aria-label="${label}"]`)).find(visibleElement);
+    // Codex reshuffles its settings markup often, so every lookup keeps a plainer
+    // fallback behind the class-based one rather than trusting a single shape.
+    const sidebarButton = label => {
+      const byClass = Array.from(document.querySelectorAll(`button.sidebar-item[aria-label="${label}"]`)).find(visibleElement);
+      if (byClass) {
+        return byClass;
+      }
+      return Array.from(document.querySelectorAll("button")).find(button => visibleElement(button) && (normalize(button.getAttribute("aria-label")) === label || normalize(button.textContent) === label)) || null;
+    };
     const archived = sidebarButton("Archived chats");
     const general = sidebarButton("General");
     let nativePage = settingsState.nativePage;
@@ -1201,12 +1241,27 @@
       // sibling shell inside the scroll container, so the container is the page to
       // hide when ours opens.
       nativePage = section && (section.querySelector("h1") ? section : section.parentElement instanceof HTMLElement ? section.parentElement : null);
+      if (!(nativePage instanceof HTMLElement)) {
+        // When the group/settings class goes away, a settings page still leads with
+        // a heading naming the section; its page root is the topmost element that
+        // stays inside the scroll host.
+        const titles = new Set(["General", "Personalization", "Notifications", "Data controls", "Security", "Archived chats", "Account", "Help"]);
+        const heading = Array.from(document.querySelectorAll("h1")).find(element => visibleElement(element) && titles.has(normalize(element.textContent)));
+        let page = heading || null;
+        while (page instanceof HTMLElement && page.parentElement instanceof HTMLElement && !scrollHost(page.parentElement)) {
+          page = page.parentElement;
+        }
+        nativePage = page instanceof HTMLElement && page !== heading && page !== document.body ? page : null;
+      }
     }
-    const navigation = archived?.closest("nav.sidebar-navigation");
-    if (!archived || !general || !nativePage || !navigation || general.closest("nav.sidebar-navigation") !== navigation) {
+    const navigation = archived?.closest("nav.sidebar-navigation") || archived?.closest("nav") || general?.closest("nav") || null;
+    if (!archived || !general || !nativePage || !navigation || !navigation.contains(general)) {
       return null;
     }
-    const navigationButtons = Array.from(navigation.querySelectorAll("button.sidebar-item")).filter(visibleElement);
+    let navigationButtons = Array.from(navigation.querySelectorAll("button.sidebar-item")).filter(visibleElement);
+    if (navigationButtons.length === 0) {
+      navigationButtons = Array.from(navigation.querySelectorAll("button")).filter(visibleElement);
+    }
     const nativeButtons = navigationButtons.filter(button => !button.hasAttribute("data-swapdex-settings-nav"));
     const selectedButton = nativeButtons.find(button => button.getAttribute("aria-current") === "page");
     const idleButton = nativeButtons.find(button => button !== selectedButton);
@@ -1444,12 +1499,12 @@
         pendingReauths.delete(profile.id);
       }
       const reauthPending = needsReauth && pendingReauths.has(profile.id);
-      const accountDetail = needsReauth ? (normalize(profile.email) || "Reauthentication required") : (normalize(profile.email) || normalize(profile.plan) || "No account details");
+        const accountDetail = needsReauth ? "Reauthentication required" : (capitalizedPlan(profile) || "No account details");
       applySettingsAvatar(avatar, profile);
       setElementText(name, accountName);
       setElementText(detail, accountDetail);
-      const primaryUsageVisible = updateUsageMeter(primaryUsage, profile.primary_remaining, "5h");
-      const secondaryUsageVisible = updateUsageMeter(secondaryUsage, profile.secondary_remaining, "7d");
+      const primaryUsageVisible = updateUsageMeter(primaryUsage, profile.primary_remaining, usageWindowLabel(profile.primary_duration_minutes, "5h"));
+      const secondaryUsageVisible = updateUsageMeter(secondaryUsage, profile.secondary_remaining, usageWindowLabel(profile.secondary_duration_minutes, "7d"));
       const usageVisible = primaryUsageVisible || secondaryUsageVisible;
       const creditsText = accountCreditsText(profile);
       const resetsText = accountResetsText(profile);
