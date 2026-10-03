@@ -8,7 +8,6 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
-#include <sys/types.h>
 #include <utility>
 #include <vector>
 
@@ -58,8 +57,8 @@ std::string sanitize_label(std::string_view label);
 // explicitly so that a store built for a test can never be pointed at the real one.
 std::filesystem::path default_account_root();
 bool valid_profile_id(std::string_view id);
-bool running_under_same_process_group(pid_t first, pid_t second);
-std::optional<pid_t> running_unmanaged_chatgpt(pid_t managed_process_group);
+bool running_under_same_process_group(std::int64_t first, std::int64_t second);
+std::optional<std::int64_t> running_unmanaged_chatgpt(std::int64_t managed_process_group);
 std::vector<std::string> sanitized_environment(const std::vector<std::pair<std::string, std::string>>& overrides);
 std::string executable_directory();
 

@@ -34,10 +34,10 @@ jobs:
             os: macos-15-intel
             archive: swapdex-macos-x64.tar.gz
             folder: swapdex
-          # Windows has no legs here on purpose: it does not compile yet, so a leg
-          # could never produce an asset and would block publish on every tag.
-          # build.yml carries the failing-windows signal; add the legs back with
-          # the port.
+          - name: windows
+            os: windows-latest
+            archive: swapdex-windows-x64.zip
+            folder: swapdex
 
     steps:
       - uses: actions/checkout@v4
@@ -91,7 +91,7 @@ jobs:
       - name: Collect release assets
         run: |
           mkdir -p release
-          find artifacts -name 'swapdex-*.tar.gz' | while read -r file; do
+          find artifacts \( -name 'swapdex-*.tar.gz' -o -name 'swapdex-*.zip' \) | while read -r file; do
             cp "$file" release/
           done
           cp install.sh release/install.sh

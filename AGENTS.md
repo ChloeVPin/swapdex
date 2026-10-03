@@ -66,8 +66,6 @@ messages, pull request text, and this file itself.
   diff. Lead with what was broken and what now happens instead.
 - Run the full test suite before opening the PR and fix failures on the branch.
 - Do not merge your own pull requests. The user merges.
-- Windows does not compile and its CI leg fails by design. That is expected, not
-  a regression.
 
 ## Releases
 

@@ -34,6 +34,7 @@ add_library(swapdex_core
     src/service_control.cpp
     src/shell.cpp
     src/util.cpp
+    src/websocket.cpp
 )
 
 target_include_directories(swapdex_core PUBLIC src)
@@ -48,7 +49,7 @@ target_compile_definitions(swapdex_core PUBLIC
 )
 
 if(WIN32)
-    target_link_libraries(swapdex_core PUBLIC advapi32)
+    target_link_libraries(swapdex_core PUBLIC advapi32 ws2_32 bcrypt ole32)
 endif()
 target_compile_definitions(swapdex_core PRIVATE
     SWAPDEX_INJECT_SCRIPT_PATH="${PROJECT_SOURCE_DIR}/assets/inject.js"
@@ -66,6 +67,11 @@ include(CTest)
 
 if(BUILD_TESTING)
     add_executable(swapdex_fake_cdp tests/fake_cdp.cpp)
+    if(WIN32)
+        target_sources(swapdex_fake_cdp PRIVATE src/websocket.cpp)
+        target_include_directories(swapdex_fake_cdp PRIVATE src)
+        target_link_libraries(swapdex_fake_cdp PRIVATE ws2_32 bcrypt)
+    endif()
     if(MSVC)
     target_compile_options(swapdex_fake_cdp PRIVATE /W4 /WX)
 else()

@@ -2,8 +2,79 @@
 #include <csignal>
 #include <string>
 #include <string_view>
+#if defined(_WIN32)
+#include <fstream>
+#include <filesystem>
+#include "websocket.hpp"
+#else
 #include <unistd.h>
+#endif
 
+#if defined(_WIN32)
+// The Windows build drives the app over a WebSocket on a loopback port. This double
+// plays the app side: it publishes a DevToolsActivePort file exactly like the real
+// browser and then serves the same canned answers over the socket.
+namespace {
+
+std::filesystem::path user_data_dir(int argc, char** argv) {
+    constexpr std::string_view prefix = "--user-data-dir=";
+    for (int i = 1; i < argc; ++i) {
+        const std::string argument(argv[i]);
+        if (argument.rfind(std::string(prefix), 0) == 0) {
+            return argument.substr(prefix.size());
+        }
+    }
+    return {};
+}
+
+void answer(swapdex::websocket::WebSocket& socket, const std::string& line, bool& done) {
+    if (line.find("\"id\":1") != std::string::npos) {
+        socket.send_text("{\"id\":1,\"result\":{\"value\":1}}");
+    } else if (line.find("\"id\":2") != std::string::npos) {
+        socket.send_text("{\"id\":2,\"result\":{\"value\":2}}");
+        socket.send_text("{\"method\":\"Test.event\",\"payload\":\"ok\"}");
+    } else if (line.find("\"id\":3") != std::string::npos) {
+        socket.send_text("{\"id\":3,\"result\":{}}");
+        done = true;
+    }
+}
+
+}
+
+int main(int argc, char** argv) {
+    const std::filesystem::path directory = user_data_dir(argc, argv);
+    if (directory.empty() || !swapdex::websocket::initialize()) {
+        return 1;
+    }
+    unsigned short port = 0;
+    const std::intptr_t listener = swapdex::websocket::listen_loopback(port);
+    if (listener == swapdex::websocket::invalid_socket()) {
+        return 1;
+    }
+    std::error_code error;
+    std::filesystem::create_directories(directory, error);
+    {
+        std::ofstream marker(directory / "DevToolsActivePort", std::ios::trunc);
+        marker << port << "\n/devtools/browser/fake\n";
+    }
+    bool done = false;
+    while (!done) {
+        auto socket = swapdex::websocket::WebSocket::accept(listener, std::chrono::seconds(30));
+        if (!socket.has_value()) {
+            break;
+        }
+        while (socket->open() && !done) {
+            const auto message = socket->receive(std::chrono::seconds(30));
+            if (!message.has_value()) {
+                break;
+            }
+            answer(*socket, *message, done);
+        }
+    }
+    swapdex::websocket::close_socket(listener);
+    return 0;
+}
+#else
 namespace {
 
 void write_all(int descriptor, std::string_view value) {
@@ -53,3 +124,4 @@ int main() {
         }
     }
 }
+#endif

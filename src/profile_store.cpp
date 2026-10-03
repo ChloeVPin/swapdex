@@ -15,6 +15,17 @@ namespace {
 constexpr std::size_t registry_maximum_bytes = 2U * 1024U * 1024U;
 const std::filesystem::perms secret_permissions = std::filesystem::perms::owner_read | std::filesystem::perms::owner_write;
 
+// remaining_percent is a percent and stays an int; everything else is a timestamp
+// or token count and stays int64. Splitting the read keeps the MSVC narrowing
+// warning honest rather than letting an implicit conversion through.
+std::optional<int> json_optional_percent(const Json& value, std::string_view key) {
+    const auto raw = json_optional_integer(value, key);
+    if (!raw.has_value()) {
+        return std::nullopt;
+    }
+    return static_cast<int>(*raw);
+}
+
 ProfileRecord record_from_json(const Json& value) {
     ProfileRecord record;
     record.id = value.at("id").get<std::string>();
@@ -26,14 +37,14 @@ ProfileRecord record_from_json(const Json& value) {
     record.authenticated = value.value("authenticated", false);
     if (value.contains("primary_usage") && value.at("primary_usage").is_object()) {
         UsageWindow window;
-        window.remaining_percent = json_optional_integer(value.at("primary_usage"), "remaining_percent");
+        window.remaining_percent = json_optional_percent(value.at("primary_usage"), "remaining_percent");
         window.resets_at = json_optional_integer(value.at("primary_usage"), "resets_at");
         window.duration_minutes = json_optional_integer(value.at("primary_usage"), "duration_minutes");
         record.primary_usage = window;
     }
     if (value.contains("secondary_usage") && value.at("secondary_usage").is_object()) {
         UsageWindow window;
-        window.remaining_percent = json_optional_integer(value.at("secondary_usage"), "remaining_percent");
+        window.remaining_percent = json_optional_percent(value.at("secondary_usage"), "remaining_percent");
         window.resets_at = json_optional_integer(value.at("secondary_usage"), "resets_at");
         window.duration_minutes = json_optional_integer(value.at("secondary_usage"), "duration_minutes");
         record.secondary_usage = window;

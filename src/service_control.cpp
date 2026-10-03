@@ -62,7 +62,13 @@ ServiceControlPaths default_service_control_paths() {
     const std::optional<std::string> state_home = environment_value("XDG_STATE_HOME");
     ServiceControlPaths paths;
     const std::string self = platform::to_native(platform::executable_directory());
-    paths.source_executable = self.empty() ? std::filesystem::current_path() / "swapdex" : std::filesystem::path(self) / "swapdex";
+    const std::string executable_name =
+#if defined(_WIN32)
+        "swapdex.exe";
+#else
+        "swapdex";
+#endif
+    paths.source_executable = self.empty() ? std::filesystem::current_path() / executable_name : std::filesystem::path(self) / executable_name;
     if (!regular_file_without_symlink(paths.source_executable)) {
         paths.source_executable = platform::executable_directory() / platform::chatgpt_executable_name();
     }
