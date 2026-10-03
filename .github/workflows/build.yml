@@ -18,21 +18,17 @@ jobs:
             os: ubuntu-latest
           - name: macos
             os: macos-latest
-          # Windows does not build yet. The local browser connection and the
-          # app-server transport are written against POSIX pipes and poll, and the
-          # Windows equivalents have not been written. This job is allowed to fail so
-          # the signal for it stays visible without turning every run red. Remove
-          # continue-on-error when the transport lands.
-          - name: windows (needs a port)
-            os: windows-latest
-            continue-on-error: true
+          # Windows does not build yet: the browser pipe and the app-server
+          # transport are POSIX only, so a leg could only ever fail. The gap is
+          # documented in AGENTS.md; when the port lands, add a leg back here
+          # and in release.yml.
 
     steps:
       - uses: actions/checkout@v4
 
-      # No packages to install: CMake uses a system nlohmann_json when it finds one and
-      # fetches the single header when it does not, so every platform configures the
-      # same way with only a compiler present.
+      # No packages to install: CMake uses a system nlohmann_json when it finds
+      # one and fetches the single header when it does not, so every platform
+      # configures the same way with only a compiler present.
       - name: Configure
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 
@@ -46,8 +42,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: swapdex-${{ matrix.name }}
-          path: |
-            build/swapdex
-            build/swapdex.exe
-            build/Release/swapdex.exe
+          path: build/swapdex
           if-no-files-found: error
