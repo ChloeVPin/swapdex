@@ -91,7 +91,7 @@ jobs:
       - name: Collect release assets
         run: |
           mkdir -p release
-          find artifacts -name 'swapdex-*.tar.gz' -o -name 'swapdex-*.zip' | while read -r file; do
+          find artifacts -name 'swapdex-*.tar.gz' | while read -r file; do
             cp "$file" release/
           done
           cp install.sh release/install.sh
