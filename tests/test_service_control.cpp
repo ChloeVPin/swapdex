@@ -296,17 +296,34 @@ void test_service_control_exec() {
         remove_root(root);
         return;
     }
-    // The log path is baked into the script because the child environment is filtered
-    // down to an allow list on purpose.
+    // The log and state paths are baked into the script because the child
+    // environment is filtered down to an allow list on purpose. The fake also has
+    // to model running state honestly: a service manager that answered "active"
+    // for every verb made the uninstall wait run out the clock.
     const std::filesystem::path fake = bin / (backend_id == "launchd" ? "launchctl" : "systemctl");
-    const std::string script = "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '" + log.string() + "'\nexit 0\n";
+    const std::filesystem::path state = root / "service-state";
+    const std::string script =
+        "#!/bin/sh\n"
+        "printf '%s\\n' \"$*\" >> '" + log.string() + "'\n"
+        "case \" $*\" in\n"
+        "  *is-active*|*print*) [ -f '" + state.string() + "' ] || exit 3 ;;\n"
+        "  *stop*|*disable*|*bootout*|*unload*) rm -f '" + state.string() + "' ;;\n"
+        "  *start*|*--now*|*load*|*kickstart*) : > '" + state.string() + "' ;;\n"
+        "esac\n"
+        "exit 0\n";
     swapdex::write_file_atomically(fake, script, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write | std::filesystem::perms::owner_exec);
     const std::optional<std::string> old_path = swapdex::environment_value("PATH");
     setenv("PATH", (bin.string() + ":" + old_path.value_or("/usr/bin:/bin")).c_str(), 1);
     swapdex::ServiceControl control(paths);
     control.install(false);
-    control.start();
-    control.stop();
+    {
+        // A live service presents as a held lock on launchd, so hold one for the
+        // calls that need the service to look running, then let go before the
+        // uninstall has to prove it can stop anything.
+        swapdex::platform::InstanceLock running(paths.state_root / "service.lock");
+        control.start();
+        control.stop();
+    }
     control.uninstall(false);
     const std::string commands = swapdex::read_file(log, 65536U);
     swapdex::test::check(commands.find("swapdex") != std::string::npos, "The real command runner never targeted the service");
