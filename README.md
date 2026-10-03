@@ -88,7 +88,7 @@ None of these touch Codex itself.
 
 Once installed, Swapdex supervises Codex rather than living inside it: a tiny service
 launches and controls the app. Quitting Codex leaves the service in place, and opening
-Codex again — however you open it — brings it back under Swapdex, so the account menu
+Codex again, however you open it, brings it back under Swapdex, so the account menu
 is always there.
 
 ## Requirements
@@ -196,6 +196,9 @@ interface end to end:
 cmake --build build --target swapdex_live_probe
 ./build/swapdex_live_probe --logged-in assets/inject.js
 ```
+
+Before changing anything, read AGENTS.md. It is the contract for how changes
+land here: writing style, code conventions, git workflow, and release steps.
 
 ## Project layout
 
