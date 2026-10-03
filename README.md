@@ -82,6 +82,11 @@ To reinstall a newer version later, run the same line again.
 
 None of these touch Codex itself.
 
+Once installed, Swapdex supervises Codex rather than living inside it: a tiny service
+launches and controls the app. Quitting Codex leaves the service in place, and opening
+Codex again — however you open it — brings it back under Swapdex, so the account menu
+is always there.
+
 ## Requirements
 
 - macOS, Linux, or Windows on a 64 bit machine

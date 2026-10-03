@@ -109,7 +109,18 @@ int Service::run() {
     acquire_singleton_lock();
     store_->initialize();
     app_server_.emplace();
-    if (const auto pid = running_unmanaged_chatgpt(own_process_id()); pid.has_value()) {
+    // A Codex already open when the service starts cannot be injected, so it is
+    // adopted exactly like one the watchdog finds later. Refusing here just left the
+    // service cycling its restart and the app it could not touch.
+    for (int attempt = 0; attempt < 8; ++attempt) {
+        const std::optional<std::int64_t> foreign = platform::running_unmanaged_chatgpt(own_process_id());
+        if (!foreign.has_value()) {
+            break;
+        }
+        report_status("Relaunching Codex under Swapdex.");
+        platform::close_process(*foreign);
+    }
+    if (platform::running_unmanaged_chatgpt(own_process_id()).has_value()) {
         throw Error("unmanaged_codex_running", "Close the normally launched Codex application before starting Swapdex");
     }
     const auto active = store_->active();
@@ -127,17 +138,19 @@ int Service::run() {
     refresh_profiles();
     ui_thread_ = std::thread([this] { process_ui_events(); });
     start_account_maintenance();
-    while (!stopping_.load() && (transitioning_.load() || browser_running_.load())) {
+    // The service does not exit when the app goes away. The watchdog keeps it loaded
+    // instead, so a normal reopen of Codex is adopted rather than the app reopening
+    // itself the moment the user closes it.
+    while (!stopping_.load()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
     }
-    const bool graceful_shutdown = stopping_.load();
     request_stop();
     stop_background_threads();
     if (cdp_.has_value()) {
         cdp_->close();
     }
     browser_running_.store(false);
-    return graceful_shutdown ? 0 : 1;
+    return 0;
 }
 
 int Service::list() {
@@ -200,6 +213,30 @@ void Service::request_stop() {
 
 void Service::process_ui_events() {
     while (!stopping_.load()) {
+        // Windows created after the service connected, most importantly the settings
+        // window, are queued by the reader thread and attached here where requests
+        // actually get answers.
+        for (;;) {
+            std::optional<std::string> target_id;
+            {
+                std::lock_guard lock(attach_mutex_);
+                if (attach_queue_.empty()) {
+                    break;
+                }
+                target_id = attach_queue_.front();
+                attach_queue_.pop_front();
+            }
+            attach_window(nlohmann::json{{"targetId", *target_id}});
+        }
+        // Between managed launches the service watches for a Codex the user opened
+        // on their own, which cannot be injected, and adopts it into the fold.
+        if (!transitioning_.load() && !browser_running_.load()) {
+            const auto now = std::chrono::steady_clock::now();
+            if (now - last_adoption_check_ >= std::chrono::seconds(2)) {
+                last_adoption_check_ = now;
+                adopt_foreign_app();
+            }
+        }
         std::optional<std::string> payload;
         if (cdp_.has_value() && cdp_->running()) {
             for (const std::string& session : session_ids()) {
@@ -213,7 +250,12 @@ void Service::process_ui_events() {
                         }
                     }
                 } catch (const Error& error) {
-                    if (error.code() == "cdp_closed" || stopping_.load()) {
+                    if (error.code() == "cdp_closed") {
+                        // The managed app is gone, but the service lives on so the
+                        // watchdog above can adopt whatever the user opens next.
+                        break;
+                    }
+                    if (stopping_.load()) {
                         return;
                     }
                 } catch (const std::exception&) {
@@ -440,7 +482,7 @@ void Service::connect_browser() {
     if (!store_.has_value() || !app_server_.has_value()) {
         throw Error("service_not_initialized", "Swapdex is not initialized");
     }
-    if (const auto pid = running_unmanaged_chatgpt(own_process_id()); pid.has_value()) {
+    if (!platform::reclaim_managed_orphans(own_process_id())) {
         throw Error("unmanaged_codex_running", "Close the normally launched Codex application before switching");
     }
     ensure_private_directory(store_->electron_user_data());
@@ -456,8 +498,19 @@ void Service::connect_browser() {
         }
         // The settings window is a separate window that only exists once the user opens
         // it, so it has to be injected when it appears rather than only at startup.
+        // The handler runs on the pipe's reader thread, where a request can never be
+        // answered because only that thread reads responses, so the target is queued
+        // for the UI thread. Attaching from here stalled the channel and the window
+        // was never injected.
         if ((method == "Target.targetCreated" || method == "Target.targetInfoChanged") && event.contains("params")) {
-            attach_window(event.at("params"));
+            const nlohmann::json& params = event.at("params");
+            if (params.is_object() && params.contains("targetId") && params.at("targetId").is_string()) {
+                const std::string target_id = params.at("targetId").get<std::string>();
+                std::lock_guard lock(attach_mutex_);
+                if (attach_queue_.size() < 32 && std::find(attach_queue_.begin(), attach_queue_.end(), target_id) == attach_queue_.end()) {
+                    attach_queue_.push_back(target_id);
+                }
+            }
         }
     });
     try {
@@ -511,6 +564,48 @@ void Service::connect_browser() {
         transitioning_.store(false);
         browser_running_.store(false);
         throw Error("cdp_protocol", "The browser control exchange was invalid");
+    }
+}
+
+// While no managed app is alive the service watches for a Codex the user launched
+// by hand. That instance can never be injected, so it is closed and reopened under
+// control; a managed orphan left by a dead service is reclaimed the same way.
+void Service::adopt_foreign_app() {
+    if (stopping_.load() || !store_.has_value() || !app_server_.has_value()) {
+        return;
+    }
+    const std::optional<std::int64_t> foreign = platform::running_unmanaged_chatgpt(own_process_id());
+    if (!foreign.has_value()) {
+        return;
+    }
+    transitioning_.store(true);
+    try {
+        const bool orphan = platform::chatgpt_process_is_managed(*foreign);
+        report_status(orphan ? "Reclaiming the Codex app a previous run left behind." : "Relaunching Codex under Swapdex.");
+        if (!platform::close_process(*foreign)) {
+            throw Error("close_failed", "The already open Codex could not be closed");
+        }
+        if (platform::running_unmanaged_chatgpt(own_process_id()).has_value()) {
+            throw Error("unmanaged_codex_running", "The already open Codex could not be closed");
+        }
+        if (cdp_.has_value()) {
+            cdp_->close();
+            cdp_.reset();
+        }
+        clear_sessions();
+        if (stopping_.load()) {
+            transitioning_.store(false);
+            return;
+        }
+        connect_browser();
+    } catch (const Error& error) {
+        transitioning_.store(false);
+        browser_running_.store(false);
+        report_error("Codex could not be relaunched under Swapdex: " + std::string(error.what()));
+    } catch (const std::exception&) {
+        transitioning_.store(false);
+        browser_running_.store(false);
+        report_error("Codex could not be relaunched under Swapdex");
     }
 }
 
@@ -715,7 +810,7 @@ void Service::launch_onboarding(const std::string& id, bool reauthenticate) {
         cdp_.reset();
         clear_sessions();
     }
-    if (const auto pid = running_unmanaged_chatgpt(own_process_id()); pid.has_value()) {
+    if (!platform::reclaim_managed_orphans(own_process_id())) {
         if (had_shared_app && previous.has_value()) {
             try {
                 store_->capture_live_auth(previous->id);
@@ -835,7 +930,7 @@ void Service::switch_profile(const std::string& id) {
     clear_sessions();
     bool live_replaced = false;
     try {
-        if (const auto pid = running_unmanaged_chatgpt(own_process_id()); pid.has_value()) {
+        if (!platform::reclaim_managed_orphans(own_process_id())) {
             throw Error("unmanaged_codex_running", "Another Codex process is still running");
         }
         store_->capture_live_auth(previous->id);
@@ -898,7 +993,7 @@ void Service::remove_profile(const std::string& id) {
     cdp_.reset();
     clear_sessions();
     try {
-        if (const auto pid = running_unmanaged_chatgpt(own_process_id()); pid.has_value()) {
+        if (!platform::reclaim_managed_orphans(own_process_id())) {
             throw Error("unmanaged_codex_running", "Another Codex process is still running");
         }
         const RemovalResult result = store_->remove(id);
@@ -947,10 +1042,13 @@ void Service::report_status(std::string message) {
 std::string Service::injection_source() const {
     const std::filesystem::path executable_path = std::filesystem::path(executable_directory());
     const std::filesystem::path data_home = std::filesystem::path(environment_value("XDG_DATA_HOME").value_or((home_directory() / ".local" / "share").string()));
-    const std::array<std::filesystem::path, 5> candidates = {
+    const std::array<std::filesystem::path, 6> candidates = {
         // A downloaded bundle is a flat folder, so the asset sits beside the binary.
         executable_path / "inject.js",
         data_home / "swapdex" / "inject.js",
+        // The install command puts the asset under the state directory on macOS, and
+        // that copy has to win over whatever sits next to the executable.
+        platform::state_directory() / "swapdex" / "inject.js",
         executable_path / ".." / "share" / "swapdex" / "inject.js",
         executable_path / ".." / "assets" / "inject.js",
         std::filesystem::path(SWAPDEX_INJECT_SCRIPT_PATH),
