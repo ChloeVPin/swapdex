@@ -165,7 +165,7 @@ void CdpPipe::start() {
 #if defined(__APPLE__)
     platform::disclaim_tcc_responsibility(attributes);
 #endif
-    int null_descriptor = open("/dev/null", O_RDWR | O_CLOEXEC);
+    std::intptr_t null_descriptor = open("/dev/null", O_RDWR | O_CLOEXEC);
     if (null_descriptor < 0) {
         posix_spawn_file_actions_destroy(&actions);
         posix_spawnattr_destroy(&attributes);
@@ -175,9 +175,9 @@ void CdpPipe::start() {
         close_descriptor(response_pipe[1]);
         throw Error("cdp_pipe_failed", "Unable to open the browser null device");
     }
-    int child_command_source = fcntl(command_pipe[0], F_DUPFD_CLOEXEC, 10);
-    int child_response_source = fcntl(response_pipe[1], F_DUPFD_CLOEXEC, 10);
-    if (child_command_source < 0 || child_response_source < 0 || fcntl(child_command_source, F_SETFD, 0) != 0 || fcntl(child_response_source, F_SETFD, 0) != 0) {
+    std::intptr_t child_command_source = fcntl(static_cast<int>(command_pipe[0]), F_DUPFD_CLOEXEC, 10);
+    std::intptr_t child_response_source = fcntl(static_cast<int>(response_pipe[1]), F_DUPFD_CLOEXEC, 10);
+    if (child_command_source < 0 || child_response_source < 0 || fcntl(static_cast<int>(child_command_source), F_SETFD, 0) != 0 || fcntl(static_cast<int>(child_response_source), F_SETFD, 0) != 0) {
         posix_spawn_file_actions_destroy(&actions);
         posix_spawnattr_destroy(&attributes);
         close_descriptor(null_descriptor);
@@ -189,16 +189,16 @@ void CdpPipe::start() {
         close_descriptor(response_pipe[1]);
         throw Error("cdp_pipe_failed", "Unable to configure child browser descriptors");
     }
-    posix_spawn_file_actions_adddup2(&actions, null_descriptor, STDIN_FILENO);
-    posix_spawn_file_actions_adddup2(&actions, null_descriptor, STDOUT_FILENO);
-    posix_spawn_file_actions_adddup2(&actions, null_descriptor, STDERR_FILENO);
+    posix_spawn_file_actions_adddup2(&actions, static_cast<int>(null_descriptor), STDIN_FILENO);
+    posix_spawn_file_actions_adddup2(&actions, static_cast<int>(null_descriptor), STDOUT_FILENO);
+    posix_spawn_file_actions_adddup2(&actions, static_cast<int>(null_descriptor), STDERR_FILENO);
     posix_spawn_file_actions_addclose(&actions, 3);
     posix_spawn_file_actions_addclose(&actions, 4);
-    posix_spawn_file_actions_adddup2(&actions, child_command_source, 3);
-    posix_spawn_file_actions_adddup2(&actions, child_response_source, 4);
-    posix_spawn_file_actions_addclose(&actions, child_command_source);
-    posix_spawn_file_actions_addclose(&actions, child_response_source);
-    posix_spawn_file_actions_addclose(&actions, null_descriptor);
+    posix_spawn_file_actions_adddup2(&actions, static_cast<int>(child_command_source), 3);
+    posix_spawn_file_actions_adddup2(&actions, static_cast<int>(child_response_source), 4);
+    posix_spawn_file_actions_addclose(&actions, static_cast<int>(child_command_source));
+    posix_spawn_file_actions_addclose(&actions, static_cast<int>(child_response_source));
+    posix_spawn_file_actions_addclose(&actions, static_cast<int>(null_descriptor));
     const std::vector<std::string> environment_storage = sanitized_environment({
         {"CODEX_HOME", codex_home_.string()},
         {"CODEX_ELECTRON_USER_DATA_PATH", electron_user_data_.string()},
@@ -244,9 +244,9 @@ void CdpPipe::start() {
         close();
         throw Error("cdp_pipe_failed", "Unable to retain browser communication pipes");
     }
-    const int flags = fcntl(response_fd_, F_GETFL, 0);
-    const int command_flags = fcntl(command_fd_, F_GETFL, 0);
-    if (flags < 0 || command_flags < 0 || fcntl(response_fd_, F_SETFL, flags | O_NONBLOCK) != 0 || fcntl(command_fd_, F_SETFL, command_flags | O_NONBLOCK) != 0) {
+    const int flags = fcntl(static_cast<int>(response_fd_), F_GETFL, 0);
+    const int command_flags = fcntl(static_cast<int>(command_fd_), F_GETFL, 0);
+    if (flags < 0 || command_flags < 0 || fcntl(static_cast<int>(response_fd_), F_SETFL, flags | O_NONBLOCK) != 0 || fcntl(static_cast<int>(command_fd_), F_SETFL, command_flags | O_NONBLOCK) != 0) {
         close();
         throw Error("cdp_pipe_failed", "Unable to configure browser communication pipes");
     }
@@ -422,7 +422,7 @@ void CdpPipe::reader_loop() {
             continue;
         }
         std::array<char, 64U * 1024U> chunk {};
-        const ssize_t count = read(response_fd_, chunk.data(), chunk.size());
+        const ssize_t count = read(static_cast<int>(response_fd_), chunk.data(), chunk.size());
         if (count < 0 && errno == EINTR) {
             continue;
         }
@@ -508,7 +508,7 @@ void CdpPipe::write_message(const nlohmann::json& message) {
         if (ready <= 0) {
             throw Error("cdp_write_timeout", "The browser control request could not be written");
         }
-        const ssize_t written = write(command_fd_, encoded.data() + offset, encoded.size() - offset);
+        const ssize_t written = write(static_cast<int>(command_fd_), encoded.data() + offset, encoded.size() - offset);
         if (written < 0 && errno == EINTR) {
             continue;
         }
@@ -585,12 +585,12 @@ void CdpPipe::terminate_child() {
     pid_ = -1;
     return;
 #else
-    const pid_t group = pid_;
+    const pid_t group = static_cast<pid_t>(pid_);
     const auto leader_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
     bool leader_reaped = false;
     while (std::chrono::steady_clock::now() < leader_deadline) {
         int status = 0;
-        const pid_t result = waitpid(pid_, &status, WNOHANG);
+        const pid_t result = waitpid(static_cast<pid_t>(pid_), &status, WNOHANG);
         if (result == pid_ || (result < 0 && errno == ECHILD)) {
             leader_reaped = true;
             pid_ = -1;
@@ -603,7 +603,7 @@ void CdpPipe::terminate_child() {
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
         while (std::chrono::steady_clock::now() < deadline) {
             int status = 0;
-            const pid_t result = waitpid(pid_, &status, WNOHANG);
+            const pid_t result = waitpid(static_cast<pid_t>(pid_), &status, WNOHANG);
             if (result == pid_ || (result < 0 && errno == ECHILD)) {
                 pid_ = -1;
                 break;
@@ -612,9 +612,9 @@ void CdpPipe::terminate_child() {
         }
     }
     if (pid_ > 0) {
-        kill(pid_, SIGKILL);
+        kill(static_cast<pid_t>(pid_), SIGKILL);
         int status = 0;
-        waitpid(pid_, &status, 0);
+        waitpid(static_cast<pid_t>(pid_), &status, 0);
         pid_ = -1;
     }
     if (kill(-group, 0) != 0 && errno == ESRCH) {

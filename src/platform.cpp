@@ -1475,19 +1475,28 @@ bool make_close_on_exec_pipe(std::intptr_t descriptors[2]) {
     descriptors[1] = writer;
     return true;
 #elif defined(__linux__)
-    return ::pipe2(descriptors, O_CLOEXEC) == 0;
-#else
-    if (::pipe(descriptors) != 0) {
+    int fds[2] = {-1, -1};
+    if (::pipe2(fds, O_CLOEXEC) != 0) {
         return false;
     }
-    for (const int descriptor : {descriptors[0], descriptors[1]}) {
+    descriptors[0] = fds[0];
+    descriptors[1] = fds[1];
+    return true;
+#else
+    int fds[2] = {-1, -1};
+    if (::pipe(fds) != 0) {
+        return false;
+    }
+    for (const int descriptor : {fds[0], fds[1]}) {
         const int flags = ::fcntl(descriptor, F_GETFD);
         if (flags == -1 || ::fcntl(descriptor, F_SETFD, flags | FD_CLOEXEC) == -1) {
-            ::close(descriptors[0]);
-            ::close(descriptors[1]);
+            ::close(fds[0]);
+            ::close(fds[1]);
             return false;
         }
     }
+    descriptors[0] = fds[0];
+    descriptors[1] = fds[1];
     return true;
 #endif
 }

@@ -282,7 +282,7 @@ private:
 #if defined(__APPLE__)
         platform::disclaim_tcc_responsibility(attributes);
 #endif
-        int null_descriptor = open("/dev/null", O_RDWR | O_CLOEXEC);
+        std::intptr_t null_descriptor = open("/dev/null", O_RDWR | O_CLOEXEC);
         if (null_descriptor < 0) {
             posix_spawn_file_actions_destroy(&actions);
             posix_spawnattr_destroy(&attributes);
@@ -294,8 +294,8 @@ private:
         }
         posix_spawn_file_actions_adddup2(&actions, static_cast<int>(input_pipe[0]), STDIN_FILENO);
         posix_spawn_file_actions_adddup2(&actions, static_cast<int>(output_pipe[1]), STDOUT_FILENO);
-        posix_spawn_file_actions_adddup2(&actions, null_descriptor, STDERR_FILENO);
-        posix_spawn_file_actions_addclose(&actions, null_descriptor);
+        posix_spawn_file_actions_adddup2(&actions, static_cast<int>(null_descriptor), STDERR_FILENO);
+        posix_spawn_file_actions_addclose(&actions, static_cast<int>(null_descriptor));
         posix_spawn_file_actions_addclose(&actions, static_cast<int>(input_pipe[0]));
         posix_spawn_file_actions_addclose(&actions, static_cast<int>(input_pipe[1]));
         posix_spawn_file_actions_addclose(&actions, static_cast<int>(output_pipe[0]));
