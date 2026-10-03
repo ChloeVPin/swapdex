@@ -10,6 +10,10 @@ install/
 .swapdex/
 *.log
 
+# Private working notes. See AGENTS.md; these never go in the public repository.
+*.local.md
+notes/
+
 # Editor and OS files
 .vscode/
 .idea/
