@@ -28,18 +28,16 @@ jobs:
             os: macos-latest
             archive: swapdex-macos-arm64.tar.gz
             folder: swapdex
+          # macos-15-intel is the surviving x64 mac runner; macos-13 was retired
+          # and left the job queued forever.
           - name: macos-x64
-            os: macos-13
+            os: macos-15-intel
             archive: swapdex-macos-x64.tar.gz
             folder: swapdex
-          - name: windows
-            os: windows-latest
-            archive: swapdex-windows-x64.zip
-            folder: swapdex
-          - name: windows-arm64
-            os: windows-11-arm
-            archive: swapdex-windows-arm64.zip
-            folder: swapdex
+          # Windows has no legs here on purpose: it does not compile yet, so a leg
+          # could never produce an asset and would block publish on every tag.
+          # build.yml carries the failing-windows signal; add the legs back with
+          # the port.
 
     steps:
       - uses: actions/checkout@v4
