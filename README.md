@@ -7,6 +7,8 @@ It attaches to the Codex you already have. It never installs Codex, never update
 Codex, and never changes the app on disk. If you uninstall Swapdex, Codex is exactly
 as it was.
 
+![Swapdex account switcher in the Codex profile menu](assets/demo.gif)
+
 ## What it adds
 
 **A real account switcher.** Add an account once, then move between accounts from the
@@ -16,9 +18,9 @@ restart.
 **Accounts that stay ready.** Swapdex keeps your credentials warm on a schedule you
 choose, so an account you have not opened in weeks still switches instantly.
 
-**Live usage, where you need it.** Five hour and seven day limits, credit balances,
-reset credits, and the date your next reset lands, shown in the profile menu and on
-the accounts page.
+**Live usage, where you need it.** Five hour, seven day, and monthly limits, credit
+balances, reset credits, and the date your next reset lands, shown in the profile
+menu and on the accounts page.
 
 **A settings page with the useful tabs.** Privacy blurs your account names everywhere
 they appear. Accounts lists everything you have stored. Menu lets you hide the rows in
