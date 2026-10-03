@@ -231,13 +231,51 @@
     }
     return wrapper;
   };
-  const applyAvatar = (row, id) => {
+  const fallbackAvatarSources = new Map();
+  const fallbackAvatarSource = (profile, colorSource) => {
+    // Rows without a remembered picture used to drop the avatar entirely. Render a
+    // monogram circle in the same muted style as the settings account fallback so
+    // every account still shows a picture.
+    const initial = accountAvatarInitial(profile);
+    const colorMatch = /rgba?\(\s*(\d+)[\s,]+(\d+)[\s,]+(\d+)/.exec(getComputedStyle(colorSource instanceof Element ? colorSource : document.body).color);
+    const [r, g, b] = colorMatch ? [Number(colorMatch[1]), Number(colorMatch[2]), Number(colorMatch[3])] : [128, 128, 128];
+    const key = `${initial} ${r} ${g} ${b}`;
+    if (fallbackAvatarSources.has(key)) {
+      return fallbackAvatarSources.get(key);
+    }
+    let source = "";
+    const canvas = document.createElement("canvas");
+    canvas.width = 96;
+    canvas.height = 96;
+    const context = canvas.getContext("2d");
+    if (context) {
+      context.beginPath();
+      context.arc(48, 48, 47, 0, Math.PI * 2);
+      context.fillStyle = `rgba(${r}, ${g}, ${b}, 0.1)`;
+      context.fill();
+      context.lineWidth = 2;
+      context.strokeStyle = `rgba(${r}, ${g}, ${b}, 0.18)`;
+      context.stroke();
+      context.fillStyle = `rgba(${r}, ${g}, ${b}, 0.72)`;
+      context.font = "600 42px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+      context.textAlign = "center";
+      context.textBaseline = "middle";
+      context.fillText(initial, 48, 50);
+      const dataUrl = canvas.toDataURL("image/png");
+      if (validAvatarSource(dataUrl)) {
+        source = dataUrl;
+      }
+    }
+    fallbackAvatarSources.set(key, source);
+    return source;
+  };
+  const applyAvatar = (row, profile, owner) => {
     const image = row.querySelector("img");
     if (!image) {
       return;
     }
     const wrapper = avatarWrapper(row, image);
-    const source = storedAvatar(id);
+    const source = storedAvatar(profile?.id) || fallbackAvatarSource(profile, owner);
     if (source.length === 0) {
       if (wrapper instanceof HTMLElement) {
         wrapper.hidden = true;
@@ -830,7 +868,7 @@
         return;
       }
       applyProfileMenuUsage(row, profile);
-      applyAvatar(row, String(profile.id));
+      applyAvatar(row, profile, owner);
       fragment.append(row);
     }
     shell.insertBefore(fragment, owner);
