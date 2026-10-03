@@ -47,17 +47,6 @@ target_compile_definitions(swapdex_core PUBLIC
     SWAPDEX_VERSION="${PROJECT_VERSION}"
 )
 
-# Both binaries are discovered at run time, next to the app or on PATH, so one build
-# serves every machine. Baking in absolute paths made the build machine's layout the
-# only one that worked, and the CLI app server silently stopped answering elsewhere.
-if(WIN32)
-    target_compile_definitions(swapdex_core PUBLIC SWAPDEX_CHATGPT_BINARY="Codex.exe")
-elseif(APPLE)
-    target_compile_definitions(swapdex_core PUBLIC SWAPDEX_CHATGPT_BINARY="Codex")
-else()
-    target_compile_definitions(swapdex_core PUBLIC SWAPDEX_CHATGPT_BINARY="ChatGPT")
-endif()
-
 if(WIN32)
     target_link_libraries(swapdex_core PUBLIC advapi32)
 endif()

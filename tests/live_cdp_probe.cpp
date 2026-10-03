@@ -6,6 +6,7 @@
 #include <thread>
 
 #include "cdp.hpp"
+#include "platform.hpp"
 #include "util.hpp"
 
 namespace {
@@ -110,7 +111,11 @@ int main(int argc, char** argv) {
         }
         const std::string source = swapdex::read_file(argv[logged_in_profile ? 2 : 1], 2U * 1024U * 1024U);
         {
-            swapdex::CdpPipe pipe(SWAPDEX_CHATGPT_BINARY, codex_home, electron);
+            const std::filesystem::path binary = swapdex::platform::find_chatgpt_binary();
+            if (binary.empty()) {
+                throw swapdex::Error("chatgpt_missing", "The Codex application could not be found");
+            }
+            swapdex::CdpPipe pipe(binary, codex_home, electron);
             pipe.start();
             pipe.request("Target.setDiscoverTargets", {{"discover", true}}, std::nullopt, std::chrono::seconds(5));
             nlohmann::json target;
