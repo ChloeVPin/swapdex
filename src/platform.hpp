@@ -47,10 +47,23 @@ std::filesystem::path chatgpt_executable_name();
 
 // Process discovery, used to refuse starting while a second Codex is already running.
 std::optional<std::int64_t> running_unmanaged_chatgpt(std::int64_t managed_process_group);
+// A Codex process that Swapdex itself launched carries the debug pipe flag, which is
+// how a managed instance left behind by a dead service is told apart from one the
+// user opened by hand.
+bool chatgpt_process_is_managed(std::int64_t pid);
+bool process_is_alive(std::int64_t pid);
+// Sends a polite termination request, or a forced one when force is set.
+bool request_process_exit(std::int64_t pid, bool force);
+// Asks a process to close, waits for it to go away, then forces it. Reports whether
+// the process is gone.
+bool close_process(std::int64_t pid);
+// Closes any Codex instance Swapdex left behind (a managed orphan) and reports false
+// only when a genuinely foreign app is still in the way.
+bool reclaim_managed_orphans(std::int64_t owner_pid);
 // Creates a pipe with both ends close on exec. pipe2 is Linux only, so macOS builds
 // the same guarantee from pipe plus fcntl.
 bool make_close_on_exec_pipe(int descriptors[2]);
-// Asks a normally launched app to close, then waits briefly for it to go away.
+// Asks every normally launched app to close, then waits briefly for them to go away.
 bool close_unmanaged_chatgpt();
 
 // Durable file system helpers.
@@ -80,6 +93,9 @@ using EnvironmentOverrides = std::vector<std::pair<std::string, std::string>>;
 std::vector<std::pair<std::string, std::string>> child_environment(const EnvironmentOverrides& overrides);
 int run_command(const std::vector<std::string>& arguments);
 int run_command(const std::vector<std::string>& arguments, const EnvironmentOverrides& overrides);
+// The same command with its output discarded, for queries whose text would only
+// pollute the caller's output.
+int run_command_silent(const std::vector<std::string>& arguments);
 bool spawn_detached(const std::vector<std::string>& arguments);
 
 ;

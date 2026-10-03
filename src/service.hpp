@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
@@ -56,6 +57,9 @@ private:
     void process_ui_events();
     void handle_ui_payload(const std::string& payload);
     void connect_browser();
+    // Takes over a Codex instance the user opened normally, or reclaims a managed
+    // orphan, so the running service keeps every app it sees under its control.
+    void adopt_foreign_app();
     void send_snapshot();
     void refresh_profiles();
     void start_account_maintenance();
@@ -124,6 +128,11 @@ private:
     mutable std::mutex sessions_mutex_;
     std::vector<std::string> session_ids_;
     std::string primary_session_;
+    // App targets the reader thread noticed, attached by the UI thread because a
+    // request from the reader can never get an answer.
+    std::deque<std::string> attach_queue_;
+    std::mutex attach_mutex_;
+    std::chrono::steady_clock::time_point last_adoption_check_{};
     std::shared_ptr<platform::InstanceLock> singleton_lock_;
 };
 

@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <optional>
 #include <poll.h>
 #include <chrono>
@@ -90,7 +91,20 @@ void test_service_control() {
     // and a query answers accordingly. Returning success for every call made a running
     // service indistinguishable from a stopped one.
     bool service_running = true;
-    auto runner = [&calls, &service_running](const std::vector<std::string>& arguments) {
+    // The backends now judge "running" by the singleton lock the service holds, so
+    // the model holds it while the pretended service is up.
+    std::shared_ptr<swapdex::platform::InstanceLock> modeled_lock = std::make_shared<swapdex::platform::InstanceLock>(paths.state_root / "service.lock");
+    auto set_running = [&paths, &service_running, &modeled_lock](bool running) {
+        service_running = running;
+        if (running) {
+            modeled_lock.reset();
+            swapdex::ensure_private_directory(paths.state_root);
+            modeled_lock = std::make_shared<swapdex::platform::InstanceLock>(paths.state_root / "service.lock");
+        } else {
+            modeled_lock.reset();
+        }
+    };
+    auto runner = [&calls, &service_running, &set_running](const std::vector<std::string>& arguments) {
         calls.push_back(arguments);
         const auto verb = [&](const std::string& name) {
             return std::find(arguments.begin(), arguments.end(), name) != arguments.end();
@@ -99,10 +113,10 @@ void test_service_control() {
             return service_running ? 0 : 1;
         }
         if (verb("disable") || verb("bootout") || verb("unload") || verb("stop")) {
-            service_running = false;
+            set_running(false);
         }
         if (verb("start") || verb("kickstart") || verb("enable") || verb("load")) {
-            service_running = true;
+            set_running(true);
         }
         return 0;
     };
@@ -282,17 +296,34 @@ void test_service_control_exec() {
         remove_root(root);
         return;
     }
-    // The log path is baked into the script because the child environment is filtered
-    // down to an allow list on purpose.
+    // The log and state paths are baked into the script because the child
+    // environment is filtered down to an allow list on purpose. The fake also has
+    // to model running state honestly: a service manager that answered "active"
+    // for every verb made the uninstall wait run out the clock.
     const std::filesystem::path fake = bin / (backend_id == "launchd" ? "launchctl" : "systemctl");
-    const std::string script = "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '" + log.string() + "'\nexit 0\n";
+    const std::filesystem::path state = root / "service-state";
+    const std::string script =
+        "#!/bin/sh\n"
+        "printf '%s\\n' \"$*\" >> '" + log.string() + "'\n"
+        "case \" $*\" in\n"
+        "  *is-active*|*print*) [ -f '" + state.string() + "' ] || exit 3 ;;\n"
+        "  *stop*|*disable*|*bootout*|*unload*) rm -f '" + state.string() + "' ;;\n"
+        "  *start*|*--now*|*load*|*kickstart*) : > '" + state.string() + "' ;;\n"
+        "esac\n"
+        "exit 0\n";
     swapdex::write_file_atomically(fake, script, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write | std::filesystem::perms::owner_exec);
     const std::optional<std::string> old_path = swapdex::environment_value("PATH");
     setenv("PATH", (bin.string() + ":" + old_path.value_or("/usr/bin:/bin")).c_str(), 1);
     swapdex::ServiceControl control(paths);
     control.install(false);
-    control.start();
-    control.stop();
+    {
+        // A live service presents as a held lock on launchd, so hold one for the
+        // calls that need the service to look running, then let go before the
+        // uninstall has to prove it can stop anything.
+        swapdex::platform::InstanceLock running(paths.state_root / "service.lock");
+        control.start();
+        control.stop();
+    }
     control.uninstall(false);
     const std::string commands = swapdex::read_file(log, 65536U);
     swapdex::test::check(commands.find("swapdex") != std::string::npos, "The real command runner never targeted the service");
@@ -336,11 +367,16 @@ void test_start_reports_the_truth() {
     }
 
     {
-        // is-active succeeds once start has been asked for, so this one is honest.
+        // The modeled service takes its lock once a start command lands, which is
+        // what makes the backend's liveness check see it as running.
         bool started = false;
-        auto runner = [&started, is_query](const std::vector<std::string>& command) {
+        std::shared_ptr<swapdex::platform::InstanceLock> lock;
+        auto runner = [&started, &lock, &paths, is_query](const std::vector<std::string>& command) {
             if (!is_query(command)) {
                 started = true;
+                swapdex::ensure_private_directory(paths.state_root);
+                lock.reset();
+                lock = std::make_shared<swapdex::platform::InstanceLock>(paths.state_root / "service.lock");
             }
             return started ? 0 : 1;
         };
@@ -380,10 +416,14 @@ void test_start_reports_the_truth() {
         std::vector<std::vector<std::string>> calls;
         bool started = false;
         bool closed = false;
-        auto runner = [&calls, &started, is_query](const std::vector<std::string>& command) {
+        std::shared_ptr<swapdex::platform::InstanceLock> lock;
+        auto runner = [&calls, &started, &lock, &paths, is_query](const std::vector<std::string>& command) {
             calls.push_back(command);
             if (!is_query(command)) {
                 started = true;
+                swapdex::ensure_private_directory(paths.state_root);
+                lock.reset();
+                lock = std::make_shared<swapdex::platform::InstanceLock>(paths.state_root / "service.lock");
             }
             return started ? 0 : 1;
         };
@@ -399,9 +439,13 @@ void test_start_reports_the_truth() {
     {
         // An app that refuses to close is reported, not ignored.
         bool started = false;
-        auto runner = [&started, is_query](const std::vector<std::string>& command) {
+        std::shared_ptr<swapdex::platform::InstanceLock> lock;
+        auto runner = [&started, &lock, &paths, is_query](const std::vector<std::string>& command) {
             if (!is_query(command)) {
                 started = true;
+                swapdex::ensure_private_directory(paths.state_root);
+                lock.reset();
+                lock = std::make_shared<swapdex::platform::InstanceLock>(paths.state_root / "service.lock");
             }
             return started ? 0 : 1;
         };

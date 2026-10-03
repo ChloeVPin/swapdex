@@ -650,6 +650,66 @@ int run_command(const std::vector<std::string>& arguments) {
     return run_command(arguments, {});
 }
 
+int run_command_silent(const std::vector<std::string>& arguments) {
+#if defined(_WIN32)
+    return run_command(arguments, {});
+#else
+    if (arguments.empty()) {
+        return 1;
+    }
+    std::vector<std::string> storage;
+    for (const auto& entry : child_environment({})) {
+        storage.push_back(entry.first + "=" + entry.second);
+        storage.emplace_back();
+    }
+    std::vector<char*> raw;
+    raw.reserve(storage.size());
+    for (std::string& entry : storage) {
+        raw.push_back(entry.data());
+    }
+    raw.push_back(nullptr);
+
+    std::vector<std::string> argument_storage;
+    argument_storage.reserve(arguments.size());
+    for (const std::string& argument : arguments) {
+        argument_storage.push_back(argument);
+    }
+    std::vector<char*> argument_pointers;
+    argument_pointers.reserve(argument_storage.size() + 1U);
+    for (std::string& argument : argument_storage) {
+        argument_pointers.push_back(argument.data());
+    }
+    argument_pointers.push_back(nullptr);
+
+    const pid_t child = ::fork();
+    if (child < 0) {
+        return 1;
+    }
+    if (child == 0) {
+        const int null_descriptor = ::open("/dev/null", O_RDWR);
+        if (null_descriptor >= 0) {
+            ::dup2(null_descriptor, STDOUT_FILENO);
+            ::dup2(null_descriptor, STDERR_FILENO);
+            if (null_descriptor > STDERR_FILENO) {
+                ::close(null_descriptor);
+            }
+        }
+        exec_program(argument_pointers.front(), argument_pointers.data(), raw.data());
+    }
+    int status = 0;
+    if (::waitpid(child, &status, 0) < 0) {
+        return 1;
+    }
+    if (WIFEXITED(status)) {
+        return WEXITSTATUS(status);
+    }
+    if (WIFSIGNALED(status)) {
+        return 128 + WTERMSIG(status);
+    }
+    return 1;
+#endif
+}
+
 int run_command(const std::vector<std::string>& arguments, const EnvironmentOverrides& overrides) {
     if (arguments.empty()) {
         return 1;
@@ -792,10 +852,7 @@ bool spawn_detached(const std::vector<std::string>& arguments) {
 #endif
 }
 
-namespace {
-
-// Sends a polite termination request to a process and reports whether it is gone.
-bool request_exit(std::int64_t pid, bool force) {
+bool request_process_exit(std::int64_t pid, bool force) {
 #if defined(_WIN32)
     HANDLE handle = OpenProcess(PROCESS_TERMINATE, FALSE, static_cast<DWORD>(pid));
     if (handle == nullptr) {
@@ -809,7 +866,7 @@ bool request_exit(std::int64_t pid, bool force) {
 #endif
 }
 
-bool process_alive(std::int64_t pid) {
+bool process_is_alive(std::int64_t pid) {
 #if defined(_WIN32)
     HANDLE handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, static_cast<DWORD>(pid));
     if (handle == nullptr) {
@@ -824,31 +881,85 @@ bool process_alive(std::int64_t pid) {
 #endif
 }
 
-}
-
-bool close_unmanaged_chatgpt() {
-    const std::optional<std::int64_t> pid = running_unmanaged_chatgpt(-1);
-    if (!pid.has_value()) {
-        return true;
-    }
+bool close_process(std::int64_t pid) {
     // The app takes a few seconds to shut down cleanly, and reporting failure because
     // it had not finished yet was wrong: the app really was closing. Wait patiently
     // before insisting, and only then force it.
-    request_exit(*pid, false);
+    request_process_exit(pid, false);
     for (int attempt = 0; attempt < 150; ++attempt) {
-        if (!process_alive(*pid)) {
+        if (!process_is_alive(pid)) {
             return true;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
-    request_exit(*pid, true);
+    request_process_exit(pid, true);
     for (int attempt = 0; attempt < 50; ++attempt) {
-        if (!process_alive(*pid)) {
+        if (!process_is_alive(pid)) {
             return true;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
     return false;
+}
+
+bool close_unmanaged_chatgpt() {
+    // Several Codex processes can be open at once, so closing only the first left
+    // the rest to block the service.
+    bool clear = true;
+    for (int guard = 0; guard < 8; ++guard) {
+        const std::optional<std::int64_t> pid = running_unmanaged_chatgpt(-1);
+        if (!pid.has_value()) {
+            return clear;
+        }
+        if (!close_process(*pid)) {
+            clear = false;
+        }
+    }
+    return clear && !running_unmanaged_chatgpt(-1).has_value();
+}
+
+bool chatgpt_process_is_managed(std::int64_t pid) {
+    // Swapdex spawns the app with --remote-debugging-pipe, a flag nothing else
+    // passes, so its presence in the arguments identifies a managed instance left
+    // behind when its service died.
+#if defined(_WIN32)
+    static_cast<void>(pid);
+    return false;
+#elif defined(__APPLE__)
+    const std::string command = "ps -o args= -p " + std::to_string(pid) + " 2>/dev/null";
+    FILE* pipe = ::popen(command.c_str(), "r");
+    if (pipe == nullptr) {
+        return false;
+    }
+    std::string arguments;
+    std::array<char, 4096> buffer{};
+    while (::fgets(buffer.data(), static_cast<int>(buffer.size()), pipe) != nullptr) {
+        arguments.append(buffer.data());
+    }
+    ::pclose(pipe);
+    return arguments.find("--remote-debugging-pipe") != std::string::npos;
+#else
+    std::ifstream stream("/proc/" + std::to_string(pid) + "/cmdline", std::ios::binary);
+    if (!stream) {
+        return false;
+    }
+    const std::string contents((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
+    return contents.find("--remote-debugging-pipe") != std::string::npos;
+#endif
+}
+
+bool reclaim_managed_orphans(std::int64_t owner_pid) {
+    for (int attempt = 0; attempt < 8; ++attempt) {
+        const std::optional<std::int64_t> pid = running_unmanaged_chatgpt(owner_pid);
+        if (!pid.has_value()) {
+            return true;
+        }
+        if (!chatgpt_process_is_managed(*pid)) {
+            return false;
+        }
+        close_process(*pid);
+    }
+    return !running_unmanaged_chatgpt(owner_pid).has_value();
 }
 
 bool make_close_on_exec_pipe(int descriptors[2]) {

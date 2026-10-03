@@ -1,5 +1,6 @@
 #include "service_backend.hpp"
 
+#include <fstream>
 #include <iostream>
 #include <sstream>
 #include <string_view>
@@ -104,12 +105,6 @@ public:
     }
 
 private:
-    // launchctl needs the numeric user id in a gui domain target. Omitting it gives
-    // "Unrecognized target specifier", so every verb failed on macOS.
-    static std::string domain_target() {
-        return "gui/" + std::to_string(platform::current_user_id()) + "/" + std::string(macos_service_label);
-    }
-
     int invoke(const std::vector<std::string>& arguments) const {
         std::vector<std::string> full;
         full.reserve(arguments.size() + 1U);
@@ -156,6 +151,7 @@ public:
 
     std::string registration_contents() const override {
         const std::string label(macos_service_label);
+        const std::string log = platform::to_native(runtime_.state_root / "service.log");
         std::ostringstream plist;
         plist << "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
               << "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
@@ -167,9 +163,10 @@ public:
               << "\t<key>RunAtLoad</key>\n\t<true/>\n"
               << "\t<key>KeepAlive</key>\n\t<dict>\n\t\t<key>SuccessfulExit</key>\n\t\t<false/>\n\t</dict>\n"
               << "\t<key>ProcessType</key>\n\t<string>Interactive</string>\n"
-              << "\t<key>LimitLoadToSessionType</key>\n\t<string>Aqua</string>\n";
-        append_plist_environment(plist, "CODEX_HOME", runtime_.override_codex_home);
-        append_plist_environment(plist, "CODEX_ELECTRON_USER_DATA_PATH", runtime_.override_electron_user_data);
+              << "\t<key>LimitLoadToSessionType</key>\n\t<string>Aqua</string>\n"
+              << "\t<key>StandardOutPath</key>\n\t<string>" << log << "</string>\n"
+              << "\t<key>StandardErrorPath</key>\n\t<string>" << log << "</string>\n";
+        append_plist_environment(plist);
         plist << "</dict>\n</plist>\n";
         return plist.str();
     }
@@ -181,27 +178,66 @@ public:
 
     int enable(bool start) override {
         const std::string target = platform::to_native(registration_file());
-        const int loaded = run({"load", "-w", target});
         if (!start) {
-            return loaded;
+            // Registered means the file exists; --no-start must not leave the job
+            // loaded because RunAtLoad would launch it anyway.
+            if (loaded()) {
+                return run({"bootout", domain_target()});
+            }
+            return 0;
+        }
+        // A load already starts the job because RunAtLoad is set, so kicking it again
+        // here killed the first copy mid launch and could leave an orphaned app.
+        if (!loaded()) {
+            return run({"load", "-w", target});
         }
         return run({"kickstart", domain_target()});
     }
 
     int start() override {
-        return run({"kickstart", domain_target()});
+        // A loaded job that is not running needs a kick; one that is not loaded needs
+        // a load, which starts it through RunAtLoad.
+        if (loaded()) {
+            return run({"kickstart", domain_target()});
+        }
+        return run({"load", "-w", platform::to_native(registration_file())});
     }
 
     bool active() const override {
-        return invoke({"print", domain_target()}) == 0;
+        // launchd only knows the job is loaded, not whether the process is alive, so
+        // asking it after a stop answered "running" forever. The service holds its
+        // lock for its whole life, so the lock is the honest signal.
+        std::error_code error;
+        if (!std::filesystem::is_directory(runtime_.state_root, error) || error) {
+            return false;
+        }
+        platform::InstanceLock probe(runtime_.state_root / "service.lock");
+        return !probe.acquired();
     }
 
     int stop() override {
-        return run({"kill", "SIGTERM", domain_target()});
+        // kill only signals the process and the job stays loaded, where KeepAlive can
+        // revive it again. bootout unloads the job; the registration file stays on
+        // disk so a start loads it back.
+        if (!loaded()) {
+            return 0;
+        }
+        return run({"bootout", domain_target()});
     }
 
     int status() override {
-        return invoke({"print", domain_target()});
+        if (active()) {
+            std::cout << "Swapdex is running.\n";
+            tail_service_log();
+            return 0;
+        }
+        if (loaded()) {
+            std::cout << "Swapdex is loaded but not running. Run swapdex start to bring it up.\n";
+        } else {
+            std::cout << "Swapdex is installed but not loaded. Run swapdex start to bring it up.\n";
+        }
+        tail_service_log();
+        return 1;
     }
 
     int disable() override {
@@ -235,12 +271,62 @@ private:
         for (const std::string& argument : arguments) {
             full.push_back(argument);
         }
-        return runner_ ? runner_(full) : platform::run_command(full);
+        // Queries must not print: launchctl print dumps the whole service record,
+        // which is how raw internals ended up in the output of start and status.
+        return runner_ ? runner_(full) : platform::run_command_silent(full);
     }
 
-    static void append_plist_environment(std::ostringstream& plist, const char* name, const std::optional<std::string>& value) {
-        if (value.has_value()) {
-            plist << "\t<key>EnvironmentVariables</key>\n\t<dict>\n\t\t<key>" << name << "</key>\n\t\t<string>" << *value << "</string>\n\t</dict>\n";
+    void append_plist_environment(std::ostringstream& plist) const {
+        // A plist dict cannot repeat a key, so every override goes into one
+        // EnvironmentVariables block rather than one block per variable.
+        std::vector<std::pair<std::string, std::string>> entries;
+        if (runtime_.override_codex_home.has_value()) {
+            entries.emplace_back("CODEX_HOME", *runtime_.override_codex_home);
+        }
+        if (runtime_.override_electron_user_data.has_value()) {
+            entries.emplace_back("CODEX_ELECTRON_USER_DATA_PATH", *runtime_.override_electron_user_data);
+        }
+        if (entries.empty()) {
+            return;
+        }
+        plist << "\t<key>EnvironmentVariables</key>\n\t<dict>\n";
+        for (const auto& [name, value] : entries) {
+            plist << "\t\t<key>" << name << "</key>\n\t\t<string>" << value << "</string>\n";
+        }
+        plist << "\t</dict>\n";
+    }
+
+    // The last few service log lines are the first thing a failing start needs, so
+    // status surfaces them rather than leaving them in a file nobody knows about.
+    void tail_service_log() const {
+        const std::filesystem::path log = runtime_.state_root / "service.log";
+        std::error_code error;
+        const auto size = std::filesystem::file_size(log, error);
+        if (error || size == 0) {
+            return;
+        }
+        std::ifstream stream(log, std::ios::binary);
+        if (!stream) {
+            return;
+        }
+        constexpr std::streamoff window = 16384;
+        if (size > window) {
+            stream.seekg(size - window);
+        }
+        std::ostringstream buffer;
+        buffer << stream.rdbuf();
+        std::string text = buffer.str();
+        // Skip a partial first line when the tail was cut mid line.
+        if (size > window) {
+            const std::size_t newline = text.find('\n');
+            text = newline == std::string::npos ? "" : text.substr(newline + 1);
+        }
+        if (text.empty()) {
+            return;
+        }
+        std::cout << "Recent service log (" << log.string() << "):\n" << text;
+        if (text.back() != '\n') {
+            std::cout << "\n";
         }
     }
 

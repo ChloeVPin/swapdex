@@ -99,6 +99,12 @@ main() {
     say ""
     say "Swapdex is installed and will start with Codex."
     say "Commands: swapdex status, swapdex list, swapdex add, swapdex uninstall"
+    # The binary lands in ~/.local/bin, which is not on every user's PATH. The
+    # service does not care, but the commands above do.
+    case ":${PATH}:" in
+        *":${HOME}/.local/bin:"*) ;;
+        *) say "  note: ${HOME}/.local/bin is not on your PATH, so the swapdex command will not resolve there. Add it to use the commands above." ;;
+    esac
     say "To reinstall a newer version, run this command again."
 }
 

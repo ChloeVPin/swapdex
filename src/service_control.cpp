@@ -222,6 +222,9 @@ int ServiceControl::install(bool start) {
     ensure_directory(executable_parent, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write | std::filesystem::perms::owner_exec | std::filesystem::perms::group_read | std::filesystem::perms::group_exec | std::filesystem::perms::others_read | std::filesystem::perms::others_exec);
     ensure_private_directory(asset_parent);
     ensure_private_directory(paths_.manifest_file.parent_path());
+    // launchd opens the service log before the service runs, so its directory has to
+    // exist already rather than being created by the service itself.
+    ensure_private_directory(paths_.state_root);
     copy_file_atomically(paths_.source_executable, paths_.installed_executable, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write | std::filesystem::perms::owner_exec);
     copy_file_atomically(paths_.source_asset, paths_.installed_asset, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write | std::filesystem::perms::group_read | std::filesystem::perms::others_read);
     write_registration(*backend);
@@ -278,6 +281,16 @@ int ServiceControl::start(bool close_app) {
     if (backend->active()) {
         std::cout << "Swapdex is already running.\n";
         return 0;
+    }
+    // A managed instance a dead service left behind looks unmanaged but carries the
+    // debug pipe flag, so it is reclaimed quietly. Only a genuinely foreign app makes
+    // a start refuse.
+    for (int guard = 0; guard < 8; ++guard) {
+        const std::optional<std::int64_t> orphan = app_probe_.running_unmanaged();
+        if (!orphan.has_value() || !platform::chatgpt_process_is_managed(*orphan)) {
+            break;
+        }
+        platform::close_process(*orphan);
     }
     // Swapdex launches the app itself so it can attach to it. A normally launched app
     // holds the same profile, so it has to be closed first, and saying so is more use
@@ -343,15 +356,20 @@ int ServiceControl::uninstall(bool purge_data) {
         // Always finish the file cleanup, even if the service manager is unreachable,
         // but never claim success while something is still running. A failed bootout used
         // to be swallowed, which left a live service with its files deleted.
-        int disable_result = 0;
         try {
-            disable_result = backend->disable();
+            backend->disable();
         } catch (const std::exception& error) {
-            disable_result = -1;
             std::string reason = error.what();
             std::cerr << "swapdex: the service could not be stopped: " << reason << "\n";
         }
-        const bool stopped = disable_result == 0 && !backend->active();
+        // Whatever the unload call returned, the honest question is whether a service
+        // is still alive: bootout marks the job down before the process finishes
+        // tearing down, and the teardown itself can take a moment.
+        bool stopped = !backend->active();
+        for (int attempt = 0; !stopped && attempt < 300; ++attempt) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            stopped = !backend->active();
+        }
         if (!stopped) {
             std::cerr << "swapdex: the service is still running, so it was not removed.\n";
             std::cerr << "Run swapdex status, stop it, then uninstall again.\n";
