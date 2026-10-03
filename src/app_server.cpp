@@ -124,6 +124,9 @@ private:
         posix_spawnattr_setsigmask(&attributes, &empty_mask);
         posix_spawnattr_setflags(&attributes, POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_SETSIGMASK);
         posix_spawnattr_setpgroup(&attributes, 0);
+#if defined(__APPLE__)
+        platform::disclaim_tcc_responsibility(attributes);
+#endif
         int null_descriptor = open("/dev/null", O_RDWR | O_CLOEXEC);
         if (null_descriptor < 0) {
             posix_spawn_file_actions_destroy(&actions);

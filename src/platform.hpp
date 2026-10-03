@@ -7,6 +7,10 @@
 #include <utility>
 #include <vector>
 
+#if defined(__APPLE__)
+#include <spawn.h>
+#endif
+
 namespace swapdex::platform {
 
 enum class Os {
@@ -97,6 +101,13 @@ int run_command(const std::vector<std::string>& arguments, const EnvironmentOver
 // pollute the caller's output.
 int run_command_silent(const std::vector<std::string>& arguments);
 bool spawn_detached(const std::vector<std::string>& arguments);
+
+#if defined(__APPLE__)
+// posix_spawn marks the spawner as responsible for the child's TCC requests, so
+// permission prompts the app raises are attributed to swapdex instead of the
+// app. Disclaiming responsibility hands the prompts back to the child.
+void disclaim_tcc_responsibility(posix_spawnattr_t& attributes);
+#endif
 
 ;
 

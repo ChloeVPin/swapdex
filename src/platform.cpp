@@ -646,6 +646,18 @@ std::vector<std::pair<std::string, std::string>> child_environment(const Environ
     return result;
 }
 
+#if defined(__APPLE__)
+// Private but present across macOS releases; weak linked so the build keeps
+// working if it ever disappears.
+extern "C" int responsibility_spawnattrs_setdisclaim(posix_spawnattr_t*, int) __attribute__((weak_import));
+
+void disclaim_tcc_responsibility(posix_spawnattr_t& attributes) {
+    if (responsibility_spawnattrs_setdisclaim != nullptr) {
+        responsibility_spawnattrs_setdisclaim(&attributes, 1);
+    }
+}
+#endif
+
 int run_command(const std::vector<std::string>& arguments) {
     return run_command(arguments, {});
 }
