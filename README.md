@@ -79,6 +79,7 @@ To reinstall a newer version later, run the same line again.
 | `swapdex start --close-app` | Start even when a Codex window is already open. |
 | `swapdex stop` | Stop Swapdex. |
 | `swapdex status` | Check whether Swapdex is installed and running, with recent log lines. |
+| `swapdex doctor` | Print an install health check to paste into a bug report. |
 | `swapdex launch` | Run Swapdex in the foreground, tied to this terminal. |
 | `swapdex uninstall` | Remove Swapdex and keep your accounts. |
 | `swapdex uninstall --purge-data` | Remove Swapdex and delete stored account data. |

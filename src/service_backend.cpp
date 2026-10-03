@@ -1,9 +1,11 @@
 #include "service_backend.hpp"
 
+#include <chrono>
 #include <fstream>
 #include <iostream>
 #include <sstream>
 #include <string_view>
+#include <thread>
 
 #include "platform.hpp"
 #include "util.hpp"
@@ -222,7 +224,9 @@ public:
         if (!loaded()) {
             return 0;
         }
-        return run({"bootout", domain_target()});
+        const int result = run({"bootout", domain_target()});
+        wait_unloaded();
+        return result;
     }
 
     int status() override {
@@ -241,14 +245,29 @@ public:
     }
 
     int disable() override {
-        // bootout is the supported way to remove a loaded job. unload is legacy and
-        // returns success even when nothing was loaded, so the result is verified
-        // afterwards rather than trusted.
+        // bootout is the supported way to remove a loaded job, and it is an error on
+        // a job that is not loaded at all. Checking first keeps a reinstall over a
+        // stopped service quiet instead of printing a failed bootout.
+        if (!loaded()) {
+            return 0;
+        }
+        // unload is legacy and returns success even when nothing was loaded, so the
+        // result is verified afterwards rather than trusted.
         const int unloaded = run({"bootout", domain_target()});
+        wait_unloaded();
         if (unloaded == 0 && !loaded()) {
             return 0;
         }
         return unloaded == 0 ? 1 : unloaded;
+    }
+
+    // bootout only queues the SIGTERM and the job object survives until the process
+    // finishes exiting. A load issued during that teardown is silently dropped, so
+    // callers must wait for the job to actually disappear before registering again.
+    void wait_unloaded() const {
+        for (int i = 0; i < 100 && loaded(); ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
     }
 
     // True when launchd still knows about the job, which is how a failed bootout is

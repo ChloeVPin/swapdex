@@ -52,6 +52,23 @@ Json usage_json(const std::optional<UsageWindow>& usage) {
     return *usage->remaining_percent;
 }
 
+// Free plans only carry a monthly pool while paid plans also get a five hour
+// window, so the label has to come from the window itself rather than a fixed
+// primary/secondary naming scheme.
+std::string usage_window_label(const UsageWindow& window, std::string_view fallback) {
+    const std::int64_t minutes = window.duration_minutes.value_or(0);
+    if (minutes >= 43200 && minutes % 43200 == 0) {
+        return std::to_string(minutes / 43200) + "mo";
+    }
+    if (minutes >= 1440 && minutes % 1440 == 0) {
+        return std::to_string(minutes / 1440) + "d";
+    }
+    if (minutes > 0) {
+        return std::to_string((minutes + 59) / 60) + "h";
+    }
+    return std::string(fallback);
+}
+
 void mark_authentication_lost(ProfileStore& store, const ProfileRecord& record) {
     try {
         store.update_metadata(record.id, record.email, record.plan, false);
@@ -171,10 +188,10 @@ int Service::list() {
         }
         std::cout << " [" << record.plan << "]";
         if (record.primary_usage.has_value() && record.primary_usage->remaining_percent.has_value()) {
-            std::cout << " 5h " << *record.primary_usage->remaining_percent << "%";
+            std::cout << " " << usage_window_label(*record.primary_usage, "5h") << " " << *record.primary_usage->remaining_percent << "%";
         }
         if (record.secondary_usage.has_value() && record.secondary_usage->remaining_percent.has_value()) {
-            std::cout << " 7d " << *record.secondary_usage->remaining_percent << "%";
+            std::cout << " " << usage_window_label(*record.secondary_usage, "7d") << " " << *record.secondary_usage->remaining_percent << "%";
         }
         if (!record.authenticated) {
             std::cout << " sign-in required";
@@ -635,7 +652,9 @@ void Service::send_snapshot_to(const std::string& session) {
         item["plan"] = record.plan;
         item["authenticated"] = record.authenticated;
         item["primary_remaining"] = usage_json(record.primary_usage);
+        item["primary_duration_minutes"] = record.primary_usage.has_value() && record.primary_usage->duration_minutes.has_value() ? nlohmann::json(*record.primary_usage->duration_minutes) : nlohmann::json();
         item["secondary_remaining"] = usage_json(record.secondary_usage);
+        item["secondary_duration_minutes"] = record.secondary_usage.has_value() && record.secondary_usage->duration_minutes.has_value() ? nlohmann::json(*record.secondary_usage->duration_minutes) : nlohmann::json();
         item["lifetime_tokens"] = record.lifetime_tokens.has_value() ? nlohmann::json(*record.lifetime_tokens) : nlohmann::json();
         item["credits_balance"] = record.credits_balance.has_value() ? nlohmann::json(*record.credits_balance) : nlohmann::json();
         item["credits_unlimited"] = record.credits_unlimited;
