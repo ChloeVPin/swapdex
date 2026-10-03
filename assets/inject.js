@@ -5,6 +5,15 @@
     return;
   }
 
+  // Evaluated before the document has a root (for example an auxiliary or
+  // still parsing context), every DOM access below would throw and the install
+  // flag would already be set, leaving the page permanently marked installed
+  // but without the swapdex functions. Returning here keeps a later attempt
+  // able to install for real.
+  if (!document.documentElement) {
+    return;
+  }
+
   Object.defineProperty(window, "__swapdexInstalled", {
     value: true,
     configurable: false,
