@@ -1157,7 +1157,12 @@
     const general = sidebarButton("General");
     let nativePage = settingsState.nativePage;
     if (!(nativePage instanceof HTMLElement) || !nativePage.isConnected || nativePage.hasAttribute("data-swapdex-settings-page")) {
-      nativePage = Array.from(document.querySelectorAll("div")).find(element => element.classList.contains("group/settings") && !element.hasAttribute("data-swapdex-settings-page") && element.isConnected && element.querySelector("h1")) || null;
+      const section = Array.from(document.querySelectorAll("div")).find(element => element.classList.contains("group/settings") && !element.hasAttribute("data-swapdex-settings-page") && element.isConnected) || null;
+      // The settings pane used to carry its heading inside group/settings, which made
+      // that element the whole page. The current layout splits the heading into a
+      // sibling shell inside the scroll container, so the container is the page to
+      // hide when ours opens.
+      nativePage = section && (section.querySelector("h1") ? section : section.parentElement instanceof HTMLElement ? section.parentElement : null);
     }
     const navigation = archived?.closest("nav.sidebar-navigation");
     if (!archived || !general || !nativePage || !navigation || general.closest("nav.sidebar-navigation") !== navigation) {
@@ -1588,7 +1593,7 @@
   };
 
   const createSettingsPage = context => {
-    const page = makeElement("div", "swapdex-settings-page group/settings mx-auto flex w-full flex-col max-w-3xl electron:min-w-[min(100%,calc(320px*var(--codex-window-zoom)))]");
+    const page = makeElement("div", "swapdex-settings-page group/settings mx-auto flex w-full flex-col max-w-3xl electron:min-w-[min(100%,calc(320px*var(--codex-window-zoom)))] px-panel min-h-0 flex-1 overflow-y-auto scrollbar-stable");
     page.id = settingsPageId;
     page.dataset.swapdexSettingsPage = "true";
     page.hidden = true;
@@ -1625,6 +1630,7 @@
     menuTab.dataset.swapdexSettingsTab = "menu";
     menuTab.setAttribute("role", "tab");
     menuTab.setAttribute("aria-controls", "swapdex-settings-panel-menu");
+    tabList.append(privacyTab, accountsTab, menuTab);
     const privacyPanel = makeElement("section", "swapdex-settings-panel flex flex-col gap-6 px-[var(--detail-page-inline-inset,0px)] py-6");
     privacyPanel.id = "swapdex-settings-panel-privacy";
     privacyPanel.dataset.swapdexSettingsPanel = "privacy";

@@ -99,10 +99,10 @@ Please read this before you install it.
 | macOS | yes, in CI and on a real Mac | yes, verified on a signed in account | a launchd agent |
 | Windows | **no, does not compile yet** | no | a login item |
 
-Linux is the only platform with an end to end test against a signed in app, so that is
-the only one this project calls supported. macOS compiles cleanly and passes the test
-suite on every commit, but nobody has run it against a real app yet, so treat it as
-unproven rather than working.
+Linux is the only platform with an end to end test run against a signed in app, so
+that is the only one this project calls supported. macOS compiles cleanly, passes the
+test suite on every commit, and has been run against a real signed in app, so treat
+it as working but exercised far less than Linux.
 
 Windows does not build. The local browser connection and the app-server transport are
 written against POSIX pipes, poll, and inherited file descriptors, and the Windows
@@ -196,6 +196,7 @@ install.ps1     one line installer for Windows
 ## Status
 
 Version 0.2.0. Built and verified on Linux against the current Codex desktop release.
-macOS and Windows are built and tested by continuous integration, but the desktop
-integration on those platforms has not been verified on real hardware yet, so treat it
-as experimental there.
+macOS is built and tested by continuous integration and has been verified against a
+real signed in app. Windows is built by continuous integration, but the desktop
+integration there has not been verified on real hardware yet, so treat it as
+experimental there.
