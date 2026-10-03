@@ -71,11 +71,15 @@ To reinstall a newer version later, run the same line again.
 
 | Command | What it does |
 | --- | --- |
+| `swapdex install` | Register Swapdex to start at sign in. The installer already runs this. |
+| `swapdex install --no-start` | Register it without starting it now. |
 | `swapdex list` | Show stored accounts and their usage. |
 | `swapdex add "name"` | Add an account and walk through sign in. |
 | `swapdex start` | Start Swapdex now. |
+| `swapdex start --close-app` | Start even when a Codex window is already open. |
 | `swapdex stop` | Stop Swapdex. |
-| `swapdex status` | Check whether Swapdex is installed and running. |
+| `swapdex status` | Check whether Swapdex is installed and running, with recent log lines. |
+| `swapdex launch` | Run Swapdex in the foreground, tied to this terminal. |
 | `swapdex uninstall` | Remove Swapdex and keep your accounts. |
 | `swapdex uninstall --purge-data` | Remove Swapdex and delete stored account data. |
 | `swapdex accounts` | List accounts and limits in the terminal, read only. |
@@ -95,7 +99,7 @@ is always there.
 
 ### What works where
 
-Swapdex is written for all three, but only one of them has been run on real hardware.
+Swapdex is written for all three, but Windows has never been run on real hardware.
 Please read this before you install it.
 
 | Platform | Builds and passes tests | Tested against a real signed in app | How it starts |
@@ -104,10 +108,10 @@ Please read this before you install it.
 | macOS | yes, in CI and on a real Mac | yes, verified on a signed in account | a launchd agent |
 | Windows | **no, does not compile yet** | no | a login item |
 
-Linux is the only platform with an end to end test run against a signed in app, so
-that is the only one this project calls supported. macOS compiles cleanly, passes the
-test suite on every commit, and has been run against a real signed in app, so treat
-it as working but exercised far less than Linux.
+Linux and macOS have both been run end to end against a real signed in app, account
+switching, the service lifecycle, and the settings page included. Linux is still the
+reference platform and sees the most exercise, but macOS counts as supported rather
+than experimental.
 
 Windows does not build. The local browser connection and the app-server transport are
 written against POSIX pipes, poll, and inherited file descriptors, and the Windows
@@ -155,12 +159,18 @@ interface and the local connection to Codex, not from Swapdex doing heavy work.
 ## Troubleshooting
 
 **The profile menu does not show my accounts.** Run `swapdex status`. If Swapdex is
-not running, run `swapdex start`. If Codex was already open before Swapdex, close it
-fully and reopen it.
+not running, run `swapdex start`. A Codex you opened yourself is picked up and
+brought under Swapdex within a few seconds, so give the menu a moment before
+concluding anything is wrong.
 
 **Adding an account fails.** Swapdex needs to own the Codex window while it signs a
 new account in. Close any Codex window that is already open, then run
 `swapdex add`.
+
+**Something failed and I want to see why.** `swapdex status` prints the last service
+log lines on macOS. The full log lives at `~/Library/Application
+Support/swapdex/service.log` there. On Linux the same output is in the journal:
+`journalctl --user -u swapdex`.
 
 **Everything looks wrong after a Codex update.** The interface is injected at runtime,
 so a large Codex release can change the markup Swapdex builds on. Pull the newest
@@ -200,8 +210,6 @@ install.ps1     one line installer for Windows
 
 ## Status
 
-Version 0.2.0. Built and verified on Linux against the current Codex desktop release.
-macOS is built and tested by continuous integration and has been verified against a
-real signed in app. Windows is built by continuous integration, but the desktop
-integration there has not been verified on real hardware yet, so treat it as
-experimental there.
+Version 0.2.0. Built and verified on Linux and macOS against the current Codex
+desktop release. Windows is kept in continuous integration so the port gap stays
+visible, but it does not compile there yet.
