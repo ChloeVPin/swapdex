@@ -212,5 +212,5 @@ install.ps1     one line installer for Windows
 
 ## Status
 
-Version 0.2.0. Built and verified on Linux, macOS, and Windows against the current
+Version 0.3.0. Built and verified on Linux, macOS, and Windows against the current
 Codex desktop release. All three platforms are kept in continuous integration.

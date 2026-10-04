@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(swapdex VERSION 0.2.0 LANGUAGES CXX)
+project(swapdex VERSION 0.3.0 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 
@@ -120,7 +120,7 @@ endif()
     add_test(NAME cli_invalid COMMAND swapdex invalid-command)
     set_tests_properties(profile_store json_rpc app_server_refresh service_control maintenance_schedule service_control_exec platform_layer shutdown_channel app_windows settings_tabs shell_bridge account_root_scope start_reports_the_truth release_bundle_layout cli_help cli_version cli_invalid PROPERTIES TIMEOUT 30)
     set_tests_properties(cli_help PROPERTIES PASS_REGULAR_EXPRESSION "swapdex install")
-    set_tests_properties(cli_version PROPERTIES PASS_REGULAR_EXPRESSION "0\\.2\\.0")
+    set_tests_properties(cli_version PROPERTIES PASS_REGULAR_EXPRESSION "0\\.3\\.0")
     set_tests_properties(cli_invalid PROPERTIES WILL_FAIL TRUE)
 
     add_executable(swapdex_live_probe EXCLUDE_FROM_ALL tests/live_cdp_probe.cpp)
