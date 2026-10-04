@@ -869,12 +869,20 @@ std::filesystem::path vendored_cli_copy(const std::filesystem::path& source) {
     }
     const std::filesystem::path target = vendor_root / "codex.exe";
     const std::filesystem::path stamp_file = vendor_root / "codex.stamp";
+    // The stamp ties the copy to the exact source file: the app ships sibling
+    // binaries that share a timestamp, so size is part of the key. An older stamp
+    // without the size never matches and re-vendors on the next run.
+    const auto size = std::filesystem::file_size(source, error);
+    if (error) {
+        return {};
+    }
+    const std::string expected = std::to_string(stamp.time_since_epoch().count()) + ":" + std::to_string(size);
     bool fresh = std::filesystem::is_regular_file(target, error) && !error;
     if (fresh) {
         std::ifstream existing(stamp_file);
-        long long recorded = 0;
+        std::string recorded;
         existing >> recorded;
-        fresh = existing.good() && recorded == stamp.time_since_epoch().count();
+        fresh = existing.good() && recorded == expected;
     }
     if (!fresh) {
         std::filesystem::copy_file(source, target, std::filesystem::copy_options::overwrite_existing, error);
@@ -882,7 +890,7 @@ std::filesystem::path vendored_cli_copy(const std::filesystem::path& source) {
             return {};
         }
         std::ofstream stamp_out(stamp_file, std::ios::trunc);
-        stamp_out << stamp.time_since_epoch().count();
+        stamp_out << expected;
     }
     return target;
 }
@@ -920,17 +928,25 @@ std::filesystem::path find_codex_cli_binary() {
         };
         for (const std::filesystem::path& root : roots) {
             for (const std::filesystem::path& layout : layouts) {
-                const std::filesystem::path candidate = root / layout;
-                std::error_code error;
-                if (std::filesystem::is_regular_file(candidate, error) && !error) {
+                std::vector<std::filesystem::path> candidates = {root / layout};
 #if defined(_WIN32)
-                    // The bundled CLI still sits inside the ACL blocked package, so it
-                    // cannot be executed in place. It is vendored to a writable spot
-                    // and the copy is refreshed when the app's own binary changes.
-                    return vendored_cli_copy(candidate);
-#else
-                    return std::filesystem::absolute(candidate).lexically_normal();
+                // Windows packages ship the POSIX CLI beside a codex.exe. The bare
+                // name is an ELF that CreateProcess cannot start, so the real
+                // executable has to win the lookup.
+                candidates.insert(candidates.begin(), root / (layout.string() + ".exe"));
 #endif
+                for (const std::filesystem::path& candidate : candidates) {
+                    std::error_code error;
+                    if (std::filesystem::is_regular_file(candidate, error) && !error) {
+#if defined(_WIN32)
+                        // The bundled CLI still sits inside the ACL blocked package, so it
+                        // cannot be executed in place. It is vendored to a writable spot
+                        // and the copy is refreshed when the app's own binary changes.
+                        return vendored_cli_copy(candidate);
+#else
+                        return std::filesystem::absolute(candidate).lexically_normal();
+#endif
+                    }
                 }
             }
         }

@@ -289,6 +289,13 @@ void ProfileStore::update_metadata(const std::string& id, std::optional<std::str
     if (record == nullptr) {
         throw Error("profile_not_found", "The requested account profile does not exist");
     }
+    // The bootstrap and pending labels are placeholders, not identities: once the
+    // app-server reports the account's email it becomes the display name, while a
+    // name the user chose is left alone.
+    const bool placeholder = record->label == "Current account" || record->label == "New account";
+    if (authenticated && email.has_value() && placeholder) {
+        record->label = sanitize_label(*email);
+    }
     record->email = std::move(email);
     record->plan = plan.empty() ? "unknown" : std::move(plan);
     record->authenticated = authenticated;
