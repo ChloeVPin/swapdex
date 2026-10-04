@@ -7,6 +7,16 @@
 #include <string_view>
 #include <thread>
 
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 #include "platform.hpp"
 #include "util.hpp"
 
@@ -22,6 +32,50 @@ void append_environment(std::ostringstream& unit, const char* name, const std::o
     if (value.has_value()) {
         unit << "Environment=" << name << "=" << *value << "\n";
     }
+}
+
+// The last few service log lines are the first thing a failing start needs, so
+// status surfaces them rather than leaving them in a file nobody knows about.
+void tail_service_log(const std::filesystem::path& log) {
+    std::error_code error;
+    const auto size = std::filesystem::file_size(log, error);
+    if (error || size == 0) {
+        return;
+    }
+    std::ifstream stream(log, std::ios::binary);
+    if (!stream) {
+        return;
+    }
+    constexpr std::streamoff window = 16384;
+    if (size > window) {
+        stream.seekg(size - window);
+    }
+    std::ostringstream buffer;
+    buffer << stream.rdbuf();
+    std::string text = buffer.str();
+    // Skip a partial first line when the tail was cut mid line.
+    if (size > window) {
+        const std::size_t newline = text.find('\n');
+        text = newline == std::string::npos ? "" : text.substr(newline + 1);
+    }
+    if (text.empty()) {
+        return;
+    }
+    std::cout << "Recent service log (" << log.string() << "):\n" << text;
+    if (text.back() != '\n') {
+        std::cout << "\n";
+    }
+}
+
+// The service holds its lock for its whole life, so the lock is the honest
+// running signal on every platform where no service manager tracks the process.
+bool service_lock_held(const std::filesystem::path& state_root) {
+    std::error_code error;
+    if (!std::filesystem::is_directory(state_root, error) || error) {
+        return false;
+    }
+    platform::InstanceLock probe(state_root / "service.lock");
+    return !probe.acquired();
 }
 
 class SystemdBackend final : public ServiceBackend {
@@ -232,7 +286,7 @@ public:
     int status() override {
         if (active()) {
             std::cout << "Swapdex is running.\n";
-            tail_service_log();
+            tail_service_log(runtime_.state_root / "service.log");
             return 0;
         }
         if (loaded()) {
@@ -240,7 +294,7 @@ public:
         } else {
             std::cout << "Swapdex is installed but not loaded. Run swapdex start to bring it up.\n";
         }
-        tail_service_log();
+        tail_service_log(runtime_.state_root / "service.log");
         return 1;
     }
 
@@ -315,40 +369,6 @@ private:
         plist << "\t</dict>\n";
     }
 
-    // The last few service log lines are the first thing a failing start needs, so
-    // status surfaces them rather than leaving them in a file nobody knows about.
-    void tail_service_log() const {
-        const std::filesystem::path log = runtime_.state_root / "service.log";
-        std::error_code error;
-        const auto size = std::filesystem::file_size(log, error);
-        if (error || size == 0) {
-            return;
-        }
-        std::ifstream stream(log, std::ios::binary);
-        if (!stream) {
-            return;
-        }
-        constexpr std::streamoff window = 16384;
-        if (size > window) {
-            stream.seekg(size - window);
-        }
-        std::ostringstream buffer;
-        buffer << stream.rdbuf();
-        std::string text = buffer.str();
-        // Skip a partial first line when the tail was cut mid line.
-        if (size > window) {
-            const std::size_t newline = text.find('\n');
-            text = newline == std::string::npos ? "" : text.substr(newline + 1);
-        }
-        if (text.empty()) {
-            return;
-        }
-        std::cout << "Recent service log (" << log.string() << "):\n" << text;
-        if (text.back() != '\n') {
-            std::cout << "\n";
-        }
-    }
-
     int run(const std::vector<std::string>& arguments) const {
         std::vector<std::string> full;
         full.reserve(arguments.size() + 1U);
@@ -382,15 +402,17 @@ public:
     }
 
     std::string registration_contents() const override {
-        return platform::to_native(runtime_.executable) + " launch";
+        // The Run key value is a command line, so the executable needs quoting to
+        // survive a path with spaces.
+        return "\"" + platform::to_native(runtime_.executable) + "\" launch";
     }
 
     bool installed() const override {
-        return platform::registry_value_exists(std::wstring(windows_run_key), std::wstring(windows_value_name));
+        return platform::registry_value_exists(std::wstring(windows_run_key), registry_value_name());
     }
 
     int enable(bool start) override {
-        platform::registry_write(std::wstring(windows_run_key), std::wstring(windows_value_name), platform::from_native(registration_contents()).wstring());
+        platform::registry_write(std::wstring(windows_run_key), registry_value_name(), platform::from_native(registration_contents()).wstring());
         if (start) {
             return start_service();
         }
@@ -401,34 +423,82 @@ public:
         return start_service();
     }
 
-    // The launcher detaches, so there is nothing reliable to poll. Report the request
-    // as accepted and let the service log speak for itself.
+    // The Run key only says the service starts at sign in. The service holds its
+    // lock for its whole life, so the lock is the honest signal.
     bool active() const override {
-        return true;
+        return service_lock_held(runtime_.state_root);
     }
 
     int stop() override {
-        // The launcher owns the app process tree, so a stop request is best effort.
+#if defined(_WIN32)
+        if (runner_) {
+            // Tests model the service manager through the runner; honor it the
+            // same way start_service does.
+            return runner_({platform::to_native(runtime_.executable), "stop"});
+        }
+        const HANDLE event = OpenEventW(EVENT_MODIFY_STATE, FALSE, L"Local\\SwapdexServiceStop");
+        if (event == nullptr) {
+            return active() ? 1 : 0;
+        }
+        SetEvent(event);
+        CloseHandle(event);
+        for (int i = 0; i < 150 && active(); ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        return active() ? 1 : 0;
+#else
         return 0;
+#endif
     }
 
     int status() override {
+        if (active()) {
+            std::cout << "Swapdex is running.\n";
+            tail_service_log(runtime_.state_root / "service.log");
+            return 0;
+        }
         if (!installed()) {
             std::cout << "Swapdex is not installed.\n";
             return 1;
         }
-        std::cout << "Swapdex is registered to start at sign in.\n";
-        return 0;
+        std::cout << "Swapdex is registered to start at sign in but not running. Run swapdex start to bring it up.\n";
+        tail_service_log(runtime_.state_root / "service.log");
+        return 1;
     }
 
     int disable() override {
-        platform::registry_delete(std::wstring(windows_run_key), std::wstring(windows_value_name));
+        // Take the running service down first so a stopped registration cannot
+        // leave a live instance behind.
+        if (active()) {
+            static_cast<void>(stop());
+        }
+        platform::registry_delete(std::wstring(windows_run_key), registry_value_name());
         return 0;
     }
 
 private:
+    // Tests pass a registration_override (a file path for the file based backends);
+    // on Windows the registry is the registry, so the override lends its file name
+    // to the Run value instead. That keeps a test registration well away from a
+    // real Swapdex entry.
+    std::wstring registry_value_name() const {
+        if (runtime_.registration_override.has_value()) {
+            const std::filesystem::path name = runtime_.registration_override->filename();
+            if (!name.empty()) {
+                return name.wstring();
+            }
+        }
+        return std::wstring(windows_value_name);
+    }
+
     int start_service() const {
-        return platform::spawn_detached({platform::to_native(runtime_.executable), "launch"});
+        if (runner_) {
+            return runner_({platform::to_native(runtime_.executable), "launch"});
+        }
+        const std::filesystem::path log = runtime_.state_root / "service.log";
+        std::error_code error;
+        std::filesystem::create_directories(runtime_.state_root, error);
+        return platform::spawn_detached({platform::to_native(runtime_.executable), "launch"}, log) ? 0 : 1;
     }
 
     ServiceRuntime runtime_;

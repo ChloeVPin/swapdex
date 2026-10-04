@@ -6,11 +6,21 @@
 #include <fstream>
 #include <memory>
 #include <optional>
-#include <poll.h>
 #include <chrono>
 #include <string>
 #include <vector>
+#if !defined(_WIN32)
+#include <poll.h>
 #include <unistd.h>
+#else
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <winsock2.h>
+#endif
 
 #include "platform.hpp"
 #include "service.hpp"
@@ -18,6 +28,9 @@
 #include "service_control.hpp"
 #include "shell.hpp"
 #include "util.hpp"
+#if defined(_WIN32)
+#include "websocket.hpp"
+#endif
 
 namespace {
 
@@ -134,9 +147,17 @@ void test_service_control() {
     const swapdex::Json manifest = swapdex::read_json_file(paths.manifest_file, 65536U);
     swapdex::test::check(manifest.value("version", 0) == 1, "The manifest version is wrong");
     swapdex::test::check(!manifest.value("backend", "").empty(), "The manifest does not record the service backend");
+#if !defined(_WIN32)
     const std::size_t call_count = calls.size();
+#endif
     control.install(false);
+#if defined(_WIN32)
+    // The Windows backend writes the Run key directly rather than asking a service
+    // manager, so the re-register is the registry value appearing again.
+    swapdex::test::check(swapdex::make_service_backend(runtime_for(paths))->installed(), "Reinstall did not re-register autostart");
+#else
     swapdex::test::check(calls.size() > call_count, "Reinstall did not re-enable autostart");
+#endif
     // A reinstall has to stop the running copy, otherwise an update leaves the old
     // process serving the old binary.
     // Each backend spells stopping differently: systemd disables, launchd boots the
@@ -147,7 +168,7 @@ void test_service_control() {
     control.start();
     control.stop();
     control.status();
-    swapdex::test::check(has_call_containing(calls, "swapdex") || !calls.empty(), "The lifecycle commands did not target the service");
+    swapdex::test::check(has_call_containing(calls, "swapdex") || !calls.empty() || backend_id == "windows", "The lifecycle commands did not target the service");
     swapdex::write_file_atomically(paths.state_root / "registry.json", "state\n", std::filesystem::perms::owner_read | std::filesystem::perms::owner_write);
     control.uninstall(false);
     swapdex::test::check(!std::filesystem::exists(paths.installed_executable), "Uninstall left the executable behind");
@@ -156,6 +177,9 @@ void test_service_control() {
     if (!registration.empty()) {
         swapdex::test::check(!std::filesystem::exists(registration), "Uninstall left the service registration behind");
     }
+#if defined(_WIN32)
+    swapdex::test::check(!swapdex::make_service_backend(runtime_for(paths))->installed(), "Uninstall left the registry registration behind");
+#endif
     swapdex::test::check(std::filesystem::exists(paths.state_root / "registry.json"), "Normal uninstall removed account data");
     swapdex::test::check(control.doctor() != 0, "The health check passed on an uninstalled add-on");
 
@@ -284,6 +308,11 @@ void test_shell_bridge() {
 }
 
 void test_service_control_exec() {
+#if defined(_WIN32)
+    // Windows registers through the Run key, not a helper command, so there is no
+    // external executable to double here.
+    return;
+#else
     const std::filesystem::path root = std::filesystem::temp_directory_path() / ("swapdex-service-exec-" + swapdex::random_identifier(8));
     swapdex::ServiceControlPaths paths = test_paths(root);
     const std::filesystem::path bin = root / "fake-bin";
@@ -334,6 +363,7 @@ void test_service_control_exec() {
         unsetenv("PATH");
     }
     remove_root(root);
+#endif
 }
 
 void test_start_reports_the_truth() {
@@ -489,13 +519,30 @@ void test_shutdown_channel_is_interruptible() {
     // The service used to wait for a stop signal in a way that could block forever, so
     // quitting the app left the service hung and it never relaunched the app. The
     // shutdown channel must be a pipe waited on with a timeout, not a blocking wait.
-    int descriptors[2] = {-1, -1};
+    std::intptr_t descriptors[2] = {-1, -1};
     swapdex::test::check(swapdex::platform::make_close_on_exec_pipe(descriptors), "The shutdown channel could not be created");
     swapdex::test::check(descriptors[0] >= 0 && descriptors[1] >= 0, "The shutdown channel has no descriptors");
 
+#if defined(_WIN32)
+    swapdex::websocket::initialize();
+    WSAPOLLFD entry {static_cast<SOCKET>(descriptors[0]), POLLRDNORM, 0};
+    const auto start = std::chrono::steady_clock::now();
+    const int ready = WSAPoll(&entry, 1, 200);
+    const auto waited = std::chrono::steady_clock::now() - start;
+    swapdex::test::check(ready == 0, "Waiting on an idle shutdown channel did not time out");
+    swapdex::test::check(waited < std::chrono::seconds(2), "Waiting on an idle shutdown channel took far longer than its timeout");
+
+    // A poke wakes it immediately, which is how a stop signal gets through.
+    const char byte = 1;
+    swapdex::test::check(::send(static_cast<SOCKET>(descriptors[1]), &byte, 1, 0) == 1, "The shutdown channel could not be poked");
+    swapdex::test::check(WSAPoll(&entry, 1, 200) > 0, "A poked shutdown channel did not wake the wait");
+
+    ::closesocket(static_cast<SOCKET>(descriptors[0]));
+    ::closesocket(static_cast<SOCKET>(descriptors[1]));
+#else
     // Nothing written: the wait must come back on its own rather than block.
     pollfd entry {};
-    entry.fd = descriptors[0];
+    entry.fd = static_cast<int>(descriptors[0]);
     entry.events = POLLIN;
     const auto start = std::chrono::steady_clock::now();
     const int ready = ::poll(&entry, 1, 200);
@@ -505,11 +552,12 @@ void test_shutdown_channel_is_interruptible() {
 
     // A poke wakes it immediately, which is how a stop signal gets through.
     const char byte = 1;
-    swapdex::test::check(::write(descriptors[1], &byte, 1) == 1, "The shutdown channel could not be poked");
+    swapdex::test::check(::write(static_cast<int>(descriptors[1]), &byte, 1) == 1, "The shutdown channel could not be poked");
     swapdex::test::check(::poll(&entry, 1, 200) > 0, "A poked shutdown channel did not wake the wait");
 
-    ::close(descriptors[0]);
-    ::close(descriptors[1]);
+    ::close(static_cast<int>(descriptors[0]));
+    ::close(static_cast<int>(descriptors[1]));
+#endif
 }
 
 void test_every_app_window_is_a_target() {

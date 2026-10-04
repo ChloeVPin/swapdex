@@ -64,9 +64,10 @@ bool close_process(std::int64_t pid);
 // Closes any Codex instance Swapdex left behind (a managed orphan) and reports false
 // only when a genuinely foreign app is still in the way.
 bool reclaim_managed_orphans(std::int64_t owner_pid);
-// Creates a pipe with both ends close on exec. pipe2 is Linux only, so macOS builds
-// the same guarantee from pipe plus fcntl.
-bool make_close_on_exec_pipe(int descriptors[2]);
+// Creates a wake channel used to interrupt the service wait loop. POSIX returns two
+// file descriptors; Windows returns two connected sockets, which is why the ends are
+// reported as intptr_t rather than int.
+bool make_close_on_exec_pipe(std::intptr_t descriptors[2]);
 // Asks every normally launched app to close, then waits briefly for them to go away.
 bool close_unmanaged_chatgpt();
 
@@ -110,6 +111,13 @@ void disclaim_tcc_responsibility(posix_spawnattr_t& attributes);
 #endif
 
 ;
+// A detached child whose output goes to a file, so a service started at sign in
+// still leaves a log behind.
+bool spawn_detached(const std::vector<std::string>& arguments, const std::filesystem::path& log_file);
+// Launches the Codex desktop app and reports the browser process id. Packaged
+// installs can only start through package activation; other executables go through
+// a normal spawn. Returns 0 on failure.
+std::int64_t launch_chatgpt(const std::filesystem::path& executable, const std::vector<std::string>& arguments);
 
 
 // Registry access, only meaningful on Windows. Exposed so the service backend and the
@@ -121,5 +129,10 @@ void registry_delete(const std::wstring& key_path, const std::wstring& name);
 
 std::string to_native(const std::filesystem::path& path);
 std::filesystem::path from_native(const std::string& path);
+
+// UTF-8 to UTF-16 conversions, meaningful on Windows where the process and file
+// APIs are wide. Shared so every translation unit converts the same way.
+std::wstring widen(const std::string& value);
+std::string narrow(const std::wstring& value);
 
 }

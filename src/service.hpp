@@ -99,8 +99,8 @@ private:
     void release_singleton_lock();
     void start_signal_thread();
     void close_signal_pipe();
-    int signal_pipe_read_ = -1;
-    int signal_pipe_write_ = -1;
+    std::intptr_t signal_pipe_read_ = -1;
+    std::intptr_t signal_pipe_write_ = -1;
     void stop_background_threads();
 
     ServiceOptions options_;

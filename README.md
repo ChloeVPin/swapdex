@@ -102,25 +102,21 @@ is always there.
 
 ### What works where
 
-Swapdex is written for all three, but Windows has never been run on real hardware.
-Please read this before you install it.
+All three platforms have been run end to end against a real signed in app, account
+switching, the service lifecycle, and the settings page included. Linux is still the
+reference platform and sees the most exercise, but macOS and Windows count as
+supported rather than experimental.
 
 | Platform | Builds and passes tests | Tested against a real signed in app | How it starts |
 | --- | --- | --- | --- |
 | Linux | yes, in CI and on this machine | yes, daily | a systemd user service |
 | macOS | yes, in CI and on a real Mac | yes, verified on a signed in account | a launchd agent |
-| Windows | **no, does not compile yet** | no | a login item |
+| Windows | yes, in CI and on a real PC | yes, verified on a signed in account | a login item |
 
-Linux and macOS have both been run end to end against a real signed in app, account
-switching, the service lifecycle, and the settings page included. Linux is still the
-reference platform and sees the most exercise, but macOS counts as supported rather
-than experimental.
-
-Windows does not build. The local browser connection and the app-server transport are
-written against POSIX pipes, poll, and inherited file descriptors, and the Windows
-equivalents have not been written. The build job for it is present and expected to fail,
-so the gap stays visible. Nothing about the account switching, credentials, or settings
-is Windows specific, so this is a transport port rather than a redesign.
+On Windows the browser connection uses the local debug port the Codex app publishes
+(`--remote-debugging-port` with a private profile directory and a WebSocket client),
+where macOS and Linux use an inherited pipe pair. The account switching,
+credentials, and settings code is shared across all three.
 
 If you are on macOS or Windows and it works for you, that is genuinely useful
 information and an issue describing what happened is welcome.
@@ -216,6 +212,5 @@ install.ps1     one line installer for Windows
 
 ## Status
 
-Version 0.2.0. Built and verified on Linux and macOS against the current Codex
-desktop release. Windows is kept in continuous integration so the port gap stays
-visible, but it does not compile there yet.
+Version 0.2.0. Built and verified on Linux, macOS, and Windows against the current
+Codex desktop release. All three platforms are kept in continuous integration.

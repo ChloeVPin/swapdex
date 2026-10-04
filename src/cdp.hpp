@@ -17,6 +17,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include "websocket.hpp"
+
 namespace swapdex {
 
 class CdpPipe {
@@ -31,7 +33,7 @@ public:
 
     void start();
     bool running() const;
-    pid_t process_group() const;
+    std::int64_t process_group() const;
     nlohmann::json request(const std::string& method, const nlohmann::json& params = nlohmann::json::object(), const std::optional<std::string>& session_id = std::nullopt, std::chrono::milliseconds timeout = std::chrono::seconds(20));
     void set_event_handler(EventHandler handler);
     void close();
@@ -52,10 +54,13 @@ private:
     std::filesystem::path executable_;
     std::filesystem::path codex_home_;
     std::filesystem::path electron_user_data_;
-    pid_t pid_ = -1;
-    pid_t process_group_ = -1;
-    int command_fd_ = -1;
-    int response_fd_ = -1;
+    std::int64_t pid_ = -1;
+    std::int64_t process_group_ = -1;
+    // The control channel is a file descriptor pair on POSIX and a socket on
+    // Windows, so both are carried as intptr_t.
+    std::intptr_t command_fd_ = -1;
+    std::intptr_t response_fd_ = -1;
+    std::optional<websocket::WebSocket> socket_;
     std::atomic<bool> running_{false};
     std::thread reader_;
     mutable std::mutex write_mutex_;

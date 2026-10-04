@@ -16,12 +16,13 @@ jobs:
         include:
           - name: linux
             os: ubuntu-latest
+            binary: build/swapdex
           - name: macos
             os: macos-latest
-          # Windows does not build yet: the browser pipe and the app-server
-          # transport are POSIX only, so a leg could only ever fail. The gap is
-          # documented in AGENTS.md; when the port lands, add a leg back here
-          # and in release.yml.
+            binary: build/swapdex
+          - name: windows
+            os: windows-latest
+            binary: build/Release/swapdex.exe
 
     steps:
       - uses: actions/checkout@v4
@@ -42,5 +43,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: swapdex-${{ matrix.name }}
-          path: build/swapdex
+          path: ${{ matrix.binary }}
           if-no-files-found: error

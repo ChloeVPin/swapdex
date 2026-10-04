@@ -7,19 +7,31 @@
 #include <cerrno>
 #include <csignal>
 #include <cstring>
+#if !defined(_WIN32)
 #include <fcntl.h>
 #include <poll.h>
 #include <spawn.h>
 #include <sys/types.h>
 #include <sys/wait.h>
-#include <thread>
 #include <unistd.h>
+#else
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+#include <thread>
 
 #include <vector>
 
 #include "util.hpp"
 
+#if !defined(_WIN32)
 extern char** environ;
+#endif
 
 namespace swapdex {
 namespace {
@@ -58,13 +70,37 @@ public:
     }
 
     void close() {
+#if defined(_WIN32)
+        if (input_fd_ != invalid_handle()) {
+            CloseHandle(to_handle(input_fd_));
+            input_fd_ = invalid_handle();
+        }
+        if (process_handle_ == nullptr) {
+            if (output_fd_ != invalid_handle()) {
+                CloseHandle(to_handle(output_fd_));
+                output_fd_ = invalid_handle();
+            }
+            return;
+        }
+        const HANDLE process = static_cast<HANDLE>(process_handle_);
+        if (WaitForSingleObject(process, 2000) == WAIT_TIMEOUT) {
+            TerminateProcess(process, 1);
+            WaitForSingleObject(process, 2000);
+        }
+        CloseHandle(process);
+        process_handle_ = nullptr;
+        if (output_fd_ != invalid_handle()) {
+            CloseHandle(to_handle(output_fd_));
+            output_fd_ = invalid_handle();
+        }
+#else
         if (input_fd_ >= 0) {
-            ::close(input_fd_);
+            ::close(static_cast<int>(input_fd_));
             input_fd_ = -1;
         }
         if (pid_ <= 0) {
             if (output_fd_ >= 0) {
-                ::close(output_fd_);
+                ::close(static_cast<int>(output_fd_));
                 output_fd_ = -1;
             }
             return;
@@ -72,7 +108,7 @@ public:
         const auto soft_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
         while (std::chrono::steady_clock::now() < soft_deadline) {
             int status = 0;
-            const pid_t result = waitpid(pid_, &status, WNOHANG);
+            const pid_t result = waitpid(static_cast<pid_t>(pid_), &status, WNOHANG);
             if (result == pid_ || (result < 0 && errno == ECHILD)) {
                 pid_ = -1;
                 break;
@@ -80,11 +116,11 @@ public:
             std::this_thread::sleep_for(std::chrono::milliseconds(20));
         }
         if (pid_ > 0) {
-            kill(-pid_, SIGTERM);
+            kill(static_cast<pid_t>(-pid_), SIGTERM);
             const auto hard_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
             while (std::chrono::steady_clock::now() < hard_deadline) {
                 int status = 0;
-                const pid_t result = waitpid(pid_, &status, WNOHANG);
+                const pid_t result = waitpid(static_cast<pid_t>(pid_), &status, WNOHANG);
                 if (result == pid_ || (result < 0 && errno == ECHILD)) {
                     pid_ = -1;
                     break;
@@ -93,21 +129,140 @@ public:
             }
         }
         if (pid_ > 0) {
-            kill(-pid_, SIGKILL);
+            kill(static_cast<pid_t>(-pid_), SIGKILL);
             int status = 0;
-            waitpid(pid_, &status, 0);
+            waitpid(static_cast<pid_t>(pid_), &status, 0);
             pid_ = -1;
         }
         if (output_fd_ >= 0) {
-            ::close(output_fd_);
+            ::close(static_cast<int>(output_fd_));
             output_fd_ = -1;
         }
+#endif
     }
 
 private:
+#if defined(_WIN32)
+    static std::intptr_t invalid_handle() {
+        return -1;
+    }
+    static HANDLE to_handle(std::intptr_t value) {
+        return reinterpret_cast<HANDLE>(value);
+    }
+#endif
+
     void spawn(const std::filesystem::path& executable, const std::filesystem::path& codex_home) {
-        int input_pipe[2] = {-1, -1};
-        int output_pipe[2] = {-1, -1};
+#if defined(_WIN32)
+        // The bundled CLI is vendored out of the package directory by
+        // find_codex_cli_binary, so this is an ordinary spawn with pipes.
+        SECURITY_ATTRIBUTES security{};
+        security.nLength = sizeof(security);
+        security.bInheritHandle = TRUE;
+        HANDLE child_stdin_read = nullptr;
+        HANDLE child_stdin_write = nullptr;
+        HANDLE child_stdout_read = nullptr;
+        HANDLE child_stdout_write = nullptr;
+        if (CreatePipe(&child_stdin_read, &child_stdin_write, &security, 0) == 0 || CreatePipe(&child_stdout_read, &child_stdout_write, &security, 0) == 0) {
+            for (HANDLE* handle : {&child_stdin_read, &child_stdin_write, &child_stdout_read, &child_stdout_write}) {
+                if (*handle != nullptr) {
+                    CloseHandle(*handle);
+                    *handle = nullptr;
+                }
+            }
+            throw Error("app_server_pipe_failed", "Unable to create app-server communication pipes");
+        }
+        // The parent ends must not leak into the child.
+        if (SetHandleInformation(child_stdin_write, HANDLE_FLAG_INHERIT, 0) == 0 || SetHandleInformation(child_stdout_read, HANDLE_FLAG_INHERIT, 0) == 0) {
+            for (HANDLE* handle : {&child_stdin_read, &child_stdin_write, &child_stdout_read, &child_stdout_write}) {
+                if (*handle != nullptr) {
+                    CloseHandle(*handle);
+                    *handle = nullptr;
+                }
+            }
+            throw Error("app_server_pipe_failed", "Unable to configure app-server communication pipes");
+        }
+        HANDLE null_handle = CreateFileW(L"NUL", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, &security, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (null_handle == INVALID_HANDLE_VALUE) {
+            for (HANDLE* handle : {&child_stdin_read, &child_stdin_write, &child_stdout_read, &child_stdout_write}) {
+                if (*handle != nullptr) {
+                    CloseHandle(*handle);
+                }
+            }
+            throw Error("app_server_pipe_failed", "Unable to open the app-server null device");
+        }
+        const std::vector<std::pair<std::string, std::string>> environment_pairs = platform::child_environment({
+            {"CODEX_HOME", codex_home.string()},
+            {"RUST_LOG", "off"},
+            {"CODEX_INTERNAL_ORIGINATOR_OVERRIDE", "Swapdex"},
+            {"SWAPDEX_MANAGED", "1"},
+        });
+        std::wstring environment_block;
+        for (const auto& [name, value] : environment_pairs) {
+            environment_block.append(platform::widen(name));
+            environment_block.push_back(L'=');
+            environment_block.append(platform::widen(value));
+            environment_block.push_back(L'\0');
+        }
+        environment_block.push_back(L'\0');
+        std::wstring command_line = L"\"" + executable.wstring() + L"\" app-server --stdio";
+        STARTUPINFOEXW startupex{};
+        startupex.StartupInfo.cb = sizeof(startupex);
+        startupex.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+        startupex.StartupInfo.hStdInput = child_stdin_read;
+        startupex.StartupInfo.hStdOutput = child_stdout_write;
+        startupex.StartupInfo.hStdError = null_handle;
+        PROCESS_INFORMATION info{};
+        std::vector<wchar_t> mutable_command(command_line.begin(), command_line.end());
+        mutable_command.push_back(L'\0');
+        // Limit the inherited set to the std handles the child actually needs;
+        // bInheritHandles alone would hand it every inheritable handle we hold.
+        std::vector<HANDLE> inherited;
+        for (HANDLE handle : {child_stdin_read, child_stdout_write, null_handle}) {
+            if (std::find(inherited.begin(), inherited.end(), handle) == inherited.end()) {
+                inherited.push_back(handle);
+            }
+        }
+        SIZE_T attribute_size = 0;
+        std::vector<char> attribute_storage;
+        bool attributes_ready = false;
+        if (InitializeProcThreadAttributeList(nullptr, 1, 0, &attribute_size) == FALSE && GetLastError() == ERROR_INSUFFICIENT_BUFFER) {
+            attribute_storage.resize(attribute_size);
+            startupex.lpAttributeList = reinterpret_cast<PPROC_THREAD_ATTRIBUTE_LIST>(attribute_storage.data());
+            attributes_ready = InitializeProcThreadAttributeList(startupex.lpAttributeList, 1, 0, &attribute_size) != FALSE
+                && UpdateProcThreadAttribute(startupex.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inherited.data(), inherited.size() * sizeof(HANDLE), nullptr, nullptr) != FALSE;
+        }
+        if (!attributes_ready) {
+            for (HANDLE* handle : {&child_stdin_read, &child_stdin_write, &child_stdout_read, &child_stdout_write, &null_handle}) {
+                if (*handle != nullptr && *handle != INVALID_HANDLE_VALUE) {
+                    CloseHandle(*handle);
+                }
+            }
+            throw Error("app_server_pipe_failed", "Unable to configure the app-server process attributes");
+        }
+        // CREATE_UNICODE_ENVIRONMENT is required once a custom Unicode environment
+        // block is passed; without it CreateProcessW fails with ERROR_INVALID_PARAMETER.
+        const DWORD spawn_flags = CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT | (environment_block.empty() ? 0U : CREATE_UNICODE_ENVIRONMENT);
+        const BOOL created = CreateProcessW(executable.wstring().c_str(), mutable_command.data(), nullptr, nullptr, TRUE, spawn_flags, environment_block.empty() ? nullptr : environment_block.data(), nullptr, &startupex.StartupInfo, &info);
+        if (startupex.lpAttributeList != nullptr) {
+            DeleteProcThreadAttributeList(startupex.lpAttributeList);
+        }
+        CloseHandle(null_handle);
+        CloseHandle(child_stdin_read);
+        CloseHandle(child_stdout_write);
+        if (created == 0) {
+            const DWORD launch_error = GetLastError();
+            CloseHandle(child_stdin_write);
+            CloseHandle(child_stdout_read);
+            throw Error("app_server_spawn_failed", "Unable to start the bundled Codex app-server (win32 error " + std::to_string(static_cast<unsigned long>(launch_error)) + ")");
+        }
+        CloseHandle(info.hThread);
+        process_handle_ = info.hProcess;
+        pid_ = static_cast<std::int64_t>(info.dwProcessId);
+        input_fd_ = reinterpret_cast<std::intptr_t>(child_stdin_write);
+        output_fd_ = reinterpret_cast<std::intptr_t>(child_stdout_read);
+#else
+        std::intptr_t input_pipe[2] = {-1, -1};
+        std::intptr_t output_pipe[2] = {-1, -1};
         if (!platform::make_close_on_exec_pipe(input_pipe) || !platform::make_close_on_exec_pipe(output_pipe)) {
             close_if_open(input_pipe[0]);
             close_if_open(input_pipe[1]);
@@ -127,7 +282,7 @@ private:
 #if defined(__APPLE__)
         platform::disclaim_tcc_responsibility(attributes);
 #endif
-        int null_descriptor = open("/dev/null", O_RDWR | O_CLOEXEC);
+        std::intptr_t null_descriptor = open("/dev/null", O_RDWR | O_CLOEXEC);
         if (null_descriptor < 0) {
             posix_spawn_file_actions_destroy(&actions);
             posix_spawnattr_destroy(&attributes);
@@ -137,14 +292,14 @@ private:
             close_if_open(output_pipe[1]);
             throw Error("app_server_pipe_failed", "Unable to open the app-server null device");
         }
-        posix_spawn_file_actions_adddup2(&actions, input_pipe[0], STDIN_FILENO);
-        posix_spawn_file_actions_adddup2(&actions, output_pipe[1], STDOUT_FILENO);
-        posix_spawn_file_actions_adddup2(&actions, null_descriptor, STDERR_FILENO);
-        posix_spawn_file_actions_addclose(&actions, null_descriptor);
-        posix_spawn_file_actions_addclose(&actions, input_pipe[0]);
-        posix_spawn_file_actions_addclose(&actions, input_pipe[1]);
-        posix_spawn_file_actions_addclose(&actions, output_pipe[0]);
-        posix_spawn_file_actions_addclose(&actions, output_pipe[1]);
+        posix_spawn_file_actions_adddup2(&actions, static_cast<int>(input_pipe[0]), STDIN_FILENO);
+        posix_spawn_file_actions_adddup2(&actions, static_cast<int>(output_pipe[1]), STDOUT_FILENO);
+        posix_spawn_file_actions_adddup2(&actions, static_cast<int>(null_descriptor), STDERR_FILENO);
+        posix_spawn_file_actions_addclose(&actions, static_cast<int>(null_descriptor));
+        posix_spawn_file_actions_addclose(&actions, static_cast<int>(input_pipe[0]));
+        posix_spawn_file_actions_addclose(&actions, static_cast<int>(input_pipe[1]));
+        posix_spawn_file_actions_addclose(&actions, static_cast<int>(output_pipe[0]));
+        posix_spawn_file_actions_addclose(&actions, static_cast<int>(output_pipe[1]));
         const std::vector<std::string> environment_storage = sanitized_environment({
             {"CODEX_HOME", codex_home.string()},
             {"RUST_LOG", "off"},
@@ -164,7 +319,9 @@ private:
             arguments.push_back(item.data());
         }
         arguments.back() = nullptr;
-        const int result = posix_spawn(&pid_, executable.c_str(), &actions, &attributes, arguments.data(), environment.data());
+        pid_t spawned = -1;
+        const int result = posix_spawn(&spawned, executable.c_str(), &actions, &attributes, arguments.data(), environment.data());
+        pid_ = spawned;
         posix_spawn_file_actions_destroy(&actions);
         posix_spawnattr_destroy(&attributes);
         close_if_open(null_descriptor);
@@ -183,16 +340,65 @@ private:
             close();
             throw Error("app_server_pipe_failed", "Unable to retain app-server communication pipes");
         }
-        const int flags = fcntl(output_fd_, F_GETFL, 0);
-        if (flags < 0 || fcntl(output_fd_, F_SETFL, flags | O_NONBLOCK) != 0) {
+        const int flags = fcntl(static_cast<int>(output_fd_), F_GETFL, 0);
+        if (flags < 0 || fcntl(static_cast<int>(output_fd_), F_SETFL, flags | O_NONBLOCK) != 0) {
             close();
             throw Error("app_server_pipe_failed", "Unable to configure app-server communication");
         }
+#endif
     }
 
-    static void close_if_open(int& descriptor) {
+#if defined(_WIN32)
+    void write_all(std::string_view data, std::chrono::steady_clock::time_point deadline) {
+        std::size_t offset = 0;
+        while (offset < data.size()) {
+            if (std::chrono::steady_clock::now() >= deadline) {
+                throw Error("app_server_timeout", "The app-server request exceeded its deadline");
+            }
+            DWORD written = 0;
+            const DWORD amount = static_cast<DWORD>(std::min<std::size_t>(data.size() - offset, 65536U));
+            if (WriteFile(to_handle(input_fd_), data.data() + offset, amount, &written, nullptr) == 0) {
+                throw Error("app_server_closed", "The app-server closed its input channel");
+            }
+            offset += static_cast<std::size_t>(written);
+        }
+    }
+
+    bool read_some(std::chrono::steady_clock::time_point deadline) {
+        for (;;) {
+            DWORD available = 0;
+            if (PeekNamedPipe(to_handle(output_fd_), nullptr, 0, nullptr, &available, nullptr) == 0) {
+                throw Error("app_server_closed", "The app-server closed before responding");
+            }
+            if (available > 0) {
+                std::array<char, 64U * 1024U> chunk{};
+                DWORD count = 0;
+                if (ReadFile(to_handle(output_fd_), chunk.data(), static_cast<DWORD>(std::min<std::size_t>(chunk.size(), available)), &count, nullptr) == 0 || count == 0) {
+                    throw Error("app_server_closed", "The app-server closed before responding");
+                }
+                buffer_.append(chunk.data(), count);
+                return true;
+            }
+            const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now());
+            if (remaining.count() <= 0) {
+                throw Error("app_server_timeout", "The app-server request exceeded its deadline");
+            }
+            // The child may have exited without producing output, which reports as a
+            // closed pipe only after a failed peek; also check the process itself.
+            if (process_handle_ != nullptr && WaitForSingleObject(static_cast<HANDLE>(process_handle_), 0) == WAIT_OBJECT_0 && available == 0) {
+                DWORD code = 0;
+                GetExitCodeProcess(static_cast<HANDLE>(process_handle_), &code);
+                if (code != STILL_ACTIVE) {
+                    throw Error("app_server_closed", "The app-server closed before responding");
+                }
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+    }
+#else
+    static void close_if_open(std::intptr_t& descriptor) {
         if (descriptor >= 0) {
-            ::close(descriptor);
+            ::close(static_cast<int>(descriptor));
             descriptor = -1;
         }
     }
@@ -204,7 +410,7 @@ private:
             if (remaining.count() <= 0) {
                 throw Error("app_server_timeout", "The app-server request exceeded its deadline");
             }
-            pollfd descriptor {input_fd_, POLLOUT, 0};
+            pollfd descriptor {static_cast<int>(input_fd_), POLLOUT, 0};
             const int ready = poll(&descriptor, 1, static_cast<int>(std::min<std::int64_t>(remaining.count(), 1000)));
             if (ready < 0 && errno == EINTR) {
                 continue;
@@ -212,7 +418,7 @@ private:
             if (ready <= 0) {
                 throw Error("app_server_timeout", "The app-server request exceeded its deadline");
             }
-            const ssize_t written = write(input_fd_, data.data() + offset, data.size() - offset);
+            const ssize_t written = write(static_cast<int>(input_fd_), data.data() + offset, data.size() - offset);
             if (written < 0 && errno == EINTR) {
                 continue;
             }
@@ -222,6 +428,38 @@ private:
             offset += static_cast<std::size_t>(written);
         }
     }
+
+    bool read_some(std::chrono::steady_clock::time_point deadline) {
+        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now());
+        if (remaining.count() <= 0) {
+            throw Error("app_server_timeout", "The app-server request exceeded its deadline");
+        }
+        pollfd descriptor {static_cast<int>(output_fd_), POLLIN, 0};
+        const int ready = poll(&descriptor, 1, static_cast<int>(std::min<std::int64_t>(remaining.count(), 1000)));
+        if (ready < 0 && errno == EINTR) {
+            return false;
+        }
+        if (ready == 0) {
+            return false;
+        }
+        if (ready < 0) {
+            throw Error("app_server_read_failed", "Unable to read the app-server response");
+        }
+        std::array<char, 64U * 1024U> chunk {};
+        const ssize_t count = read(static_cast<int>(output_fd_), chunk.data(), chunk.size());
+        if (count < 0 && errno == EINTR) {
+            return false;
+        }
+        if (count < 0) {
+            throw Error("app_server_read_failed", "Unable to read the app-server response");
+        }
+        if (count == 0) {
+            throw Error("app_server_closed", "The app-server closed before responding");
+        }
+        buffer_.append(chunk.data(), static_cast<std::size_t>(count));
+        return true;
+    }
+#endif
 
     Json read_response(std::uint64_t id, std::chrono::steady_clock::time_point deadline) {
         for (;;) {
@@ -241,39 +479,16 @@ private:
             if (buffer_.size() > maximum_frame_bytes) {
                 throw Error("app_server_protocol", "The app-server response exceeded the permitted size");
             }
-            const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now());
-            if (remaining.count() <= 0) {
-                throw Error("app_server_timeout", "The app-server request exceeded its deadline");
-            }
-            pollfd descriptor {output_fd_, POLLIN, 0};
-            const int ready = poll(&descriptor, 1, static_cast<int>(std::min<std::int64_t>(remaining.count(), 1000)));
-            if (ready < 0 && errno == EINTR) {
-                continue;
-            }
-            if (ready == 0) {
-                continue;
-            }
-            if (ready < 0) {
-                throw Error("app_server_read_failed", "Unable to read the app-server response");
-            }
-            std::array<char, 64U * 1024U> chunk {};
-            const ssize_t count = read(output_fd_, chunk.data(), chunk.size());
-            if (count < 0 && errno == EINTR) {
-                continue;
-            }
-            if (count < 0) {
-                throw Error("app_server_read_failed", "Unable to read the app-server response");
-            }
-            if (count == 0) {
-                throw Error("app_server_closed", "The app-server closed before responding");
-            }
-            buffer_.append(chunk.data(), static_cast<std::size_t>(count));
+            read_some(deadline);
         }
     }
 
-    pid_t pid_ = -1;
-    int input_fd_ = -1;
-    int output_fd_ = -1;
+    std::int64_t pid_ = -1;
+    std::intptr_t input_fd_ = -1;
+    std::intptr_t output_fd_ = -1;
+#if defined(_WIN32)
+    void* process_handle_ = nullptr;
+#endif
     std::string buffer_;
 };
 
@@ -366,7 +581,9 @@ std::vector<ResetCreditDetail> parse_reset_credits(const Json& value) {
 
 AppServerClient::AppServerClient(std::filesystem::path executable)
     : executable_(executable.empty() ? platform::find_codex_cli_binary() : std::move(executable)) {
+#if !defined(_WIN32)
     std::signal(SIGPIPE, SIG_IGN);
+#endif
 }
 
 AppServerSnapshot AppServerClient::query(const std::filesystem::path& codex_home, std::chrono::milliseconds timeout, bool proactive_token_refresh) {

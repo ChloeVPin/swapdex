@@ -7,10 +7,21 @@
 #include <csignal>
 #include <cstdio>
 #include <iostream>
+#if !defined(_WIN32)
 #include <poll.h>
 #include <pthread.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#else
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <winsock2.h>
+#include <windows.h>
+#endif
 #include <thread>
 #include <vector>
 
@@ -31,7 +42,11 @@ namespace {
 // the real id lets the foreign app check tell our own app apart from one the user
 // started by hand, which it could not do when every caller passed a placeholder.
 std::int64_t own_process_id() {
+#if defined(_WIN32)
+    return static_cast<std::int64_t>(GetCurrentProcessId());
+#else
     return static_cast<std::int64_t>(::getpid());
+#endif
 }
 
 }
@@ -532,18 +547,31 @@ void Service::connect_browser() {
     });
     try {
         cdp_->start();
-        cdp_->request("Target.setDiscoverTargets", {{"discover", true}}, std::nullopt, std::chrono::seconds(5));
         const std::string source = injection_source();
         bool injected_any = false;
         std::string first_failure;
         const auto attach_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
-        while (!stopping_.load() && std::chrono::steady_clock::now() < attach_deadline) {
-            const nlohmann::json targets = cdp_->request("Target.getTargets", nlohmann::json::object(), std::nullopt, std::chrono::seconds(2));
-            for (const std::string& target_id : find_targets(targets)) {
-                if (attach_window(nlohmann::json{{"targetId", target_id}})) {
-                    injected_any = true;
-                } else if (first_failure.empty()) {
-                    first_failure = "the Codex window could not be prepared";
+        // The Windows debug port accepts the WebSocket handshake before the
+        // browser answers CDP requests, so a request that stalls during startup
+        // is retried inside the attach window instead of ending the service.
+        bool discover_targets = false;
+        while (!stopping_.load() && cdp_->running() && std::chrono::steady_clock::now() < attach_deadline) {
+            try {
+                if (!discover_targets) {
+                    cdp_->request("Target.setDiscoverTargets", {{"discover", true}}, std::nullopt, std::chrono::seconds(2));
+                    discover_targets = true;
+                }
+                const nlohmann::json targets = cdp_->request("Target.getTargets", nlohmann::json::object(), std::nullopt, std::chrono::seconds(2));
+                for (const std::string& target_id : find_targets(targets)) {
+                    if (attach_window(nlohmann::json{{"targetId", target_id}})) {
+                        injected_any = true;
+                    } else if (first_failure.empty()) {
+                        first_failure = "the Codex window could not be prepared";
+                    }
+                }
+            } catch (const Error& request_error) {
+                if (first_failure.empty()) {
+                    first_failure = std::string("the browser control channel is not ready: ") + request_error.what();
                 }
             }
             if (injected_any) {
@@ -843,10 +871,56 @@ void Service::launch_onboarding(const std::string& id, bool reauthenticate) {
         return;
     }
     ensure_private_directory(store_->onboarding_user_data(id));
+#if defined(_WIN32)
+    // A packaged app cannot see a redirected CODEX_HOME, so the sign-in always
+    // lands in the shared home. Snapshot the live credentials first so the
+    // previous account can be put back, and completion means the shared file
+    // changed rather than the profile home gaining one.
+    if (previous.has_value()) {
+        try {
+            store_->capture_live_auth(previous->id);
+        } catch (const std::exception&) {
+        }
+    }
+    const std::filesystem::path shared_auth = store_->shared_codex_home() / "auth.json";
+    std::optional<std::filesystem::file_time_type> shared_auth_before;
+    {
+        std::error_code stamp_error;
+        if (std::filesystem::is_regular_file(shared_auth, stamp_error) && !stamp_error) {
+            const auto stamp = std::filesystem::last_write_time(shared_auth, stamp_error);
+            if (!stamp_error) {
+                shared_auth_before = stamp;
+            }
+        }
+    }
+    const auto onboarding_credential = [&] {
+        std::error_code probe_error;
+        if (!std::filesystem::is_regular_file(shared_auth, probe_error) || probe_error) {
+            return false;
+        }
+        const auto stamp = std::filesystem::last_write_time(shared_auth, probe_error);
+        if (probe_error) {
+            return false;
+        }
+        return !shared_auth_before.has_value() || stamp != *shared_auth_before;
+    };
+#endif
+#if defined(_WIN32)
+    CdpPipe onboarding(chatgpt_binary(), store_->shared_codex_home(), store_->onboarding_user_data(id));
+#else
     CdpPipe onboarding(chatgpt_binary(), store_->profile_home(id), store_->onboarding_user_data(id));
+#endif
     try {
         onboarding.start();
     } catch (const std::exception&) {
+#if defined(_WIN32)
+        if (previous.has_value()) {
+            try {
+                store_->restore_live_auth(previous->id);
+            } catch (const std::exception&) {
+            }
+        }
+#endif
         if (had_shared_app && previous.has_value()) {
             try {
                 store_->capture_live_auth(previous->id);
@@ -866,15 +940,20 @@ void Service::launch_onboarding(const std::string& id, bool reauthenticate) {
     // wait is bounded either way so it can never hang.
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(10);
     bool signed_in = false;
+#if defined(_WIN32)
+    const auto credential_ready = [&] { return onboarding_credential(); };
+#else
+    const auto credential_ready = [this, &id] { return credential_present(id); };
+#endif
     while (!stopping_.load() && std::chrono::steady_clock::now() < deadline) {
-        if (credential_present(id)) {
+        if (credential_ready()) {
             signed_in = true;
             break;
         }
         if (!onboarding.running()) {
             // The window is gone. Give the credential a moment to land before giving up.
             for (int grace = 0; grace < 20 && !stopping_.load(); ++grace) {
-                if (credential_present(id)) {
+                if (credential_ready()) {
                     signed_in = true;
                     break;
                 }
@@ -885,6 +964,16 @@ void Service::launch_onboarding(const std::string& id, bool reauthenticate) {
         std::this_thread::sleep_for(std::chrono::milliseconds(250));
     }
     onboarding.close();
+#if defined(_WIN32)
+    // The new sign-in lives in the shared home; park it under its profile so the
+    // normal snapshot machinery sees it exactly like a POSIX onboarding.
+    if (signed_in) {
+        try {
+            store_->capture_live_auth(id);
+        } catch (const std::exception&) {
+        }
+    }
+#endif
     if (!signed_in && !stopping_.load() && !credential_present(id)) {
         store_->prune_pending_placeholders();
         report_error("Sign-in was not completed before the window closed");
@@ -1047,9 +1136,7 @@ void Service::report_error(std::string message) {
     }
     const std::string expression = "window.__swapdexShowStatus && window.__swapdexShowStatus(" + nlohmann::json(message).dump() + ")";
     try {
-        if (const std::string primary = primary_session_id(); !primary.empty()) {
-            cdp_->request("Runtime.evaluate", {{"expression", expression}, {"returnByValue", true}}, primary, std::chrono::seconds(5));
-        }
+        cdp_->request("Runtime.evaluate", {{"expression", expression}, {"returnByValue", true}}, primary, std::chrono::seconds(5));
     } catch (const Error&) {
     }
 }
@@ -1136,21 +1223,40 @@ namespace {
 // this pipe. The signal thread does the real work. Using a pipe rather than
 // sigtimedwait or sigwait means the wait always has a timeout, so a stop request can
 // never be missed because no signal happened to arrive.
-std::atomic<int> stop_pipe_write_end{-1};
+std::atomic<std::intptr_t> stop_pipe_write_end{-1};
 
+#if defined(_WIN32)
+// `swapdex stop` pokes this event; the service creates it on startup. A detached
+// process has no console, so the event is the only out of band stop channel there.
+HANDLE stop_event_handle = nullptr;
+
+BOOL WINAPI handle_console_event(DWORD type) {
+    if (type != CTRL_C_EVENT && type != CTRL_BREAK_EVENT && type != CTRL_CLOSE_EVENT && type != CTRL_SHUTDOWN_EVENT) {
+        return FALSE;
+    }
+    const std::intptr_t socket = stop_pipe_write_end.load();
+    if (socket >= 0) {
+        const char byte = 1;
+        const int written = ::send(static_cast<SOCKET>(socket), &byte, 1, 0);
+        static_cast<void>(written);
+    }
+    return TRUE;
+}
+#else
 void handle_stop_signal(int) {
-    const int descriptor = stop_pipe_write_end.load();
+    const std::intptr_t descriptor = stop_pipe_write_end.load();
     if (descriptor >= 0) {
         const char byte = 1;
-        const ssize_t written = ::write(descriptor, &byte, 1);
+        const ssize_t written = ::write(static_cast<int>(descriptor), &byte, 1);
         static_cast<void>(written);
     }
 }
+#endif
 
 }
 
 void Service::start_signal_thread() {
-    int descriptors[2] = {-1, -1};
+    std::intptr_t descriptors[2] = {-1, -1};
     if (!platform::make_close_on_exec_pipe(descriptors)) {
         throw Error("signal_setup_failed", "Unable to create the service shutdown channel");
     }
@@ -1158,6 +1264,32 @@ void Service::start_signal_thread() {
     signal_pipe_write_ = descriptors[1];
     stop_pipe_write_end.store(descriptors[1]);
 
+#if defined(_WIN32)
+    // The stop event lives in the session namespace, so a second service in the
+    // same session is a non issue: the singleton lock already keeps that out.
+    stop_event_handle = CreateEventW(nullptr, TRUE, FALSE, L"Local\\SwapdexServiceStop");
+    // A service with no console still needs its stop event; console control is only
+    // the interactive fallback, so a failed handler registration is not fatal.
+    SetConsoleCtrlHandler(&handle_console_event, TRUE);
+
+    signal_thread_ = std::thread([this] {
+        while (!stopping_.load()) {
+            WSAPOLLFD entry{static_cast<SOCKET>(signal_pipe_read_), POLLRDNORM, 0};
+            const int ready = WSAPoll(&entry, 1, 250);
+            if (ready > 0 && (entry.revents & (POLLRDNORM | POLLHUP | POLLERR)) != 0) {
+                char drain[64] = {0};
+                const int drained = ::recv(static_cast<SOCKET>(signal_pipe_read_), drain, sizeof(drain), 0);
+                static_cast<void>(drained);
+                request_stop();
+            } else if (ready < 0) {
+                request_stop();
+            }
+            if (stop_event_handle != nullptr && WaitForSingleObject(stop_event_handle, 0) == WAIT_OBJECT_0) {
+                request_stop();
+            }
+        }
+    });
+#else
     struct sigaction action {};
     action.sa_handler = handle_stop_signal;
     sigemptyset(&action.sa_mask);
@@ -1170,13 +1302,13 @@ void Service::start_signal_thread() {
     signal_thread_ = std::thread([this] {
         while (!stopping_.load()) {
             struct pollfd entry {};
-            entry.fd = signal_pipe_read_;
+            entry.fd = static_cast<int>(signal_pipe_read_);
             entry.events = POLLIN;
             const int ready = ::poll(&entry, 1, 250);
             if (ready > 0) {
                 if ((entry.revents & (POLLIN | POLLHUP | POLLERR)) != 0) {
                     char drain[64] = {0};
-                    const ssize_t drained = ::read(signal_pipe_read_, drain, sizeof(drain));
+                    const ssize_t drained = ::read(static_cast<int>(signal_pipe_read_), drain, sizeof(drain));
                     static_cast<void>(drained);
                     request_stop();
                 }
@@ -1185,15 +1317,30 @@ void Service::start_signal_thread() {
             }
         }
     });
+#endif
 }
 
 void Service::close_signal_pipe() {
-    for (int* descriptor : {&signal_pipe_read_, &signal_pipe_write_}) {
+#if defined(_WIN32)
+    SetConsoleCtrlHandler(&handle_console_event, FALSE);
+    for (std::intptr_t* descriptor : {&signal_pipe_read_, &signal_pipe_write_}) {
         if (*descriptor >= 0) {
-            ::close(*descriptor);
+            ::closesocket(static_cast<SOCKET>(*descriptor));
             *descriptor = -1;
         }
     }
+    if (stop_event_handle != nullptr) {
+        CloseHandle(stop_event_handle);
+        stop_event_handle = nullptr;
+    }
+#else
+    for (std::intptr_t* descriptor : {&signal_pipe_read_, &signal_pipe_write_}) {
+        if (*descriptor >= 0) {
+            ::close(static_cast<int>(*descriptor));
+            *descriptor = -1;
+        }
+    }
+#endif
     stop_pipe_write_end.store(-1);
 }
 

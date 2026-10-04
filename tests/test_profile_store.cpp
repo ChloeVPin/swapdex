@@ -14,6 +14,7 @@ std::filesystem::path test_root() {
     return std::filesystem::temp_directory_path() / ("sw-t-" + swapdex::random_identifier(4));
 }
 
+#if !defined(_WIN32)
 mode_t permissions_of(const std::filesystem::path& path) {
     struct stat status {};
     if (stat(path.c_str(), &status) != 0) {
@@ -21,6 +22,7 @@ mode_t permissions_of(const std::filesystem::path& path) {
     }
     return status.st_mode & 0777;
 }
+#endif
 
 }
 
@@ -41,9 +43,17 @@ void test_profile_store() {
     if (copied_auth != "{\"tokens\":{\"test\":\"first\"}}\n") {
         throw swapdex::test::Failure("Initial auth copy changed: " + copied_auth);
     }
+#if !defined(_WIN32)
     swapdex::test::check_equal(permissions_of(store.profile_auth(initial->id)), static_cast<mode_t>(0600), "Profile auth permissions are not 0600");
     swapdex::test::check_equal(permissions_of(state / "registry.json"), static_cast<mode_t>(0600), "Registry permissions are not 0600");
     swapdex::test::check_equal(permissions_of(state), static_cast<mode_t>(0700), "State directory permissions are not 0700");
+#else
+    // Windows has no unix mode bits; what still must hold is that the private
+    // files exist where the store wrote them.
+    swapdex::test::check(std::filesystem::is_regular_file(store.profile_auth(initial->id)), "Profile auth file was not written");
+    swapdex::test::check(std::filesystem::is_regular_file(state / "registry.json"), "Registry file was not written");
+    swapdex::test::check(std::filesystem::is_directory(state), "State directory was not created");
+#endif
     store.update_maintenance(initial->id, "ok");
     swapdex::test::check_equal(store.active()->maintenance_status, std::string("ok"), "Maintenance status was not recorded");
     swapdex::test::check(store.active()->last_maintenance_at.has_value(), "Maintenance timestamp was not recorded");

@@ -6,8 +6,15 @@
 #include <nlohmann/json.hpp>
 
 int main() {
+#if defined(_WIN32)
+    char* home_buffer = nullptr;
+    std::size_t home_length = 0;
+    const std::string home = (_dupenv_s(&home_buffer, &home_length, "CODEX_HOME") == 0 && home_buffer != nullptr) ? home_buffer : "";
+    std::free(home_buffer);
+#else
     const char* home_value = std::getenv("CODEX_HOME");
     const std::string home = home_value == nullptr ? "" : home_value;
+#endif
     std::string line;
     while (std::getline(std::cin, line)) {
         if (line.empty()) {

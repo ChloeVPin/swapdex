@@ -1,13 +1,16 @@
 #include <chrono>
-#include <fcntl.h>
 #include <filesystem>
 #include <string>
-#include <sys/file.h>
 #include <thread>
+#if !defined(_WIN32)
+#include <fcntl.h>
+#include <sys/file.h>
 #include <unistd.h>
+#endif
 
 #include "app_server.hpp"
 #include "cdp.hpp"
+#include "platform.hpp"
 #include "test.hpp"
 #include "util.hpp"
 
@@ -21,11 +24,11 @@ std::filesystem::path test_root() {
 
 // Looks for a Codex command line tool on PATH without running it.
 bool codex_command_line_available() {
-    const char* path = std::getenv("PATH");
-    if (path == nullptr) {
+    const auto path = swapdex::environment_value("PATH");
+    if (!path.has_value()) {
         return false;
     }
-    const std::string entries(path);
+    const std::string entries(*path);
     std::size_t start = 0;
     while (start <= entries.size()) {
         const std::size_t end = entries.find(':', start);
@@ -54,6 +57,14 @@ void test_json_rpc() {
     swapdex::ensure_private_directory(root);
     const std::filesystem::path lock_path = root / "preserved.lock";
     swapdex::write_file_atomically(lock_path, "lock", std::filesystem::perms::owner_read | std::filesystem::perms::owner_write);
+#if defined(_WIN32)
+    // The POSIX test proves a launch does not disturb fd 3. The honest Windows twin
+    // is a held lock surviving a child launch: the child must not inherit or close
+    // the handle that owns it.
+    swapdex::platform::InstanceLock preserved_lock(lock_path);
+    swapdex::test::check(preserved_lock.acquired(), "Unable to prepare lock preservation test");
+    bool event_received = false;
+#else
     const int preserved_descriptor = open(lock_path.c_str(), O_RDWR | O_CLOEXEC);
     int original_three = -1;
     if (fcntl(3, F_GETFD) != -1) {
@@ -62,6 +73,7 @@ void test_json_rpc() {
     swapdex::test::check(preserved_descriptor >= 0 && dup2(preserved_descriptor, 3) == 3, "Unable to prepare descriptor preservation test");
     swapdex::test::check(flock(3, LOCK_EX | LOCK_NB) == 0, "Unable to lock preserved descriptor");
     bool event_received = false;
+#endif
     {
         swapdex::CdpPipe pipe(SWAPDEX_FAKE_CDP_PATH, root / "codex", root / "electron");
         pipe.set_event_handler([&event_received](const nlohmann::json& event) {
@@ -89,6 +101,14 @@ void test_json_rpc() {
         }
         swapdex::test::check(event_received, "CDP event was not delivered");
     }
+#if defined(_WIN32)
+    // The lock was still held while the fake app ran, so a competing lock must
+    // still be refused now that it is gone.
+    {
+        swapdex::platform::InstanceLock competing_lock(lock_path);
+        swapdex::test::check(!competing_lock.acquired(), "Preserved lock was lost during the CDP session");
+    }
+#else
     swapdex::test::check(fcntl(3, F_GETFD) != -1, "CDP launch closed inherited descriptor 3");
     const int competing_lock = open(lock_path.c_str(), O_RDWR | O_CLOEXEC);
     swapdex::test::check(competing_lock >= 0 && flock(competing_lock, LOCK_EX | LOCK_NB) != 0, "Preserved descriptor lock was lost");
@@ -102,6 +122,7 @@ void test_json_rpc() {
         close(original_three);
     }
     close(preserved_descriptor);
+#endif
     // This exercises the real Codex app server, so it can only assert anything when a
     // Codex command line tool is actually installed. On a build machine without one the
     // run fails to start, which is a different outcome and not a defect here.
