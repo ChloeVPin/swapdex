@@ -14,8 +14,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Pinned rather than ubuntu-latest: the label migrates to Ubuntu 26.04 from
+          # October 19, 2026, and a newer compiler arrives with it.
           - name: linux
-            os: ubuntu-latest
+            os: ubuntu-24.04
             binary: build/swapdex
           - name: macos
             os: macos-latest
@@ -25,7 +27,7 @@ jobs:
             binary: build/Release/swapdex.exe
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # No packages to install: CMake uses a system nlohmann_json when it finds
       # one and fetches the single header when it does not, so every platform
@@ -40,7 +42,7 @@ jobs:
         run: ctest --test-dir build -C Release --output-on-failure
 
       - name: Upload binary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: swapdex-${{ matrix.name }}
           path: ${{ matrix.binary }}

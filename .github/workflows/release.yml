@@ -16,8 +16,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Pinned rather than ubuntu-latest for the same reason as the build workflow.
           - name: linux
-            os: ubuntu-latest
+            os: ubuntu-24.04
             archive: swapdex-linux-x64.tar.gz
             folder: swapdex
           - name: linux-arm64
@@ -40,7 +41,7 @@ jobs:
             folder: swapdex
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Linux build dependencies
         if: runner.os == 'Linux'
@@ -74,7 +75,7 @@ jobs:
           fi
 
       - name: Upload bundle
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: bundle-${{ matrix.name }}
           path: staging/${{ matrix.archive }}
@@ -82,10 +83,10 @@ jobs:
 
   publish:
     needs: package
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
       - name: Collect release assets
@@ -98,7 +99,7 @@ jobs:
           cp install.ps1 release/install.ps1
           ls -la release
       - name: Publish the release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: release/*
           generate_release_notes: true
