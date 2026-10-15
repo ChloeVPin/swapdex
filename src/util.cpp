@@ -41,7 +41,8 @@ void close_handle(HANDLE& handle) {
 
 // Opens an existing regular file for reading and rejects anything else up front.
 HANDLE open_file_read(const std::filesystem::path& path) {
-    const HANDLE handle = CreateFileW(path.wstring().c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    // A path past MAX_PATH needs the extended form before it reaches the Win32 call.
+    const HANDLE handle = CreateFileW(platform::extended_path(path).wstring().c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (handle == INVALID_HANDLE_VALUE) {
         return nullptr;
     }
@@ -50,7 +51,7 @@ HANDLE open_file_read(const std::filesystem::path& path) {
 
 // Creates a fresh file exclusively, the Windows equivalent of O_EXCL.
 HANDLE create_file_exclusive(const std::filesystem::path& path) {
-    const HANDLE handle = CreateFileW(path.wstring().c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+    const HANDLE handle = CreateFileW(platform::extended_path(path).wstring().c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (handle == INVALID_HANDLE_VALUE) {
         return nullptr;
     }
@@ -140,21 +141,24 @@ void ensure_directory(const std::filesystem::path& path, std::filesystem::perms 
     if (path.empty()) {
         throw Error("invalid_path", "Directory path is empty");
     }
+    // A path past MAX_PATH needs the extended form on Windows to be reachable at all.
+    // Shorter paths are returned unchanged, so nothing about ordinary paths depends on this.
+    const std::filesystem::path target = platform::extended_path(path);
     std::error_code error;
-    std::filesystem::create_directories(path, error);
+    std::filesystem::create_directories(target, error);
     if (error) {
         throw Error("directory_create_failed", "Unable to create a required directory");
     }
-    if (!std::filesystem::is_directory(path, error) || error || std::filesystem::is_symlink(path)) {
+    if (!std::filesystem::is_directory(target, error) || error || std::filesystem::is_symlink(target)) {
         throw Error("directory_invalid", "A required path is not a regular directory");
     }
 #if !defined(_WIN32)
-    std::filesystem::permissions(path, permissions, std::filesystem::perm_options::replace, error);
+    std::filesystem::permissions(target, permissions, std::filesystem::perm_options::replace, error);
     if (error) {
         throw Error("directory_permissions_failed", "Unable to secure a required directory");
     }
     struct stat status {};
-    if (::stat(path.c_str(), &status) != 0 || status.st_uid != getuid()) {
+    if (::stat(target.c_str(), &status) != 0 || status.st_uid != getuid()) {
         throw Error("directory_owner_invalid", "A required directory has an unexpected owner");
     }
 #else
@@ -207,14 +211,14 @@ void write_file_atomically(const std::filesystem::path& path, std::string_view c
             throw Error("file_sync_failed", "Unable to synchronize a temporary file");
         }
         close_handle(descriptor);
-        if (MoveFileExW(temporary.wstring().c_str(), path.wstring().c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) == 0) {
+        if (MoveFileExW(platform::extended_path(temporary).wstring().c_str(), platform::extended_path(path).wstring().c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) == 0) {
             throw Error("file_replace_failed", "Unable to atomically replace a file");
         }
         static_cast<void>(permissions);
     } catch (...) {
         close_handle(descriptor);
         std::error_code ignored;
-        std::filesystem::remove(temporary, ignored);
+        std::filesystem::remove(platform::extended_path(temporary), ignored);
         throw;
     }
     return;
@@ -254,7 +258,7 @@ void write_file_atomically(const std::filesystem::path& path, std::string_view c
     } catch (...) {
         close_if_open(descriptor);
         std::error_code ignored;
-        std::filesystem::remove(temporary, ignored);
+        std::filesystem::remove(platform::extended_path(temporary), ignored);
         throw;
     }
 #endif
@@ -354,7 +358,7 @@ void copy_file_atomically(const std::filesystem::path& source, const std::filesy
         close_if_open(destination_descriptor);
         close(source_descriptor);
         std::error_code ignored;
-        std::filesystem::remove(temporary, ignored);
+        std::filesystem::remove(platform::extended_path(temporary), ignored);
         throw;
     }
 }

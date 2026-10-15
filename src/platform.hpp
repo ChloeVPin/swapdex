@@ -142,6 +142,10 @@ void registry_delete(const std::wstring& key_path, const std::wstring& name);
 
 std::string to_native(const std::filesystem::path& path);
 std::filesystem::path from_native(const std::string& path);
+// The extended length form of a path. The Windows file APIs reject a path past MAX_PATH
+// unless it carries the \\?\ prefix, so the file helpers pass paths through this first.
+// A path short enough to need no prefix, and every path on POSIX, is returned unchanged.
+std::filesystem::path extended_path(const std::filesystem::path& path);
 
 // UTF-8 to UTF-16 conversions, meaningful on Windows where the process and file
 // APIs are wide. Shared so every translation unit converts the same way.

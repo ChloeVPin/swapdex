@@ -609,6 +609,29 @@ std::filesystem::path from_native(const std::string& path) {
 #endif
 }
 
+std::filesystem::path extended_path(const std::filesystem::path& path) {
+#if defined(_WIN32)
+    std::wstring native = path.wstring();
+    // Everything short enough to work as it is keeps its current form, so only the paths
+    // that would otherwise be rejected are rewritten.
+    if (native.size() < MAX_PATH || native.rfind(L"\\\\?\\", 0) == 0) {
+        return path;
+    }
+    std::error_code error;
+    const std::filesystem::path resolved = std::filesystem::absolute(path, error);
+    std::wstring target = (error ? path : resolved).lexically_normal().wstring();
+    if (target.size() < 3 || target[1] != L':') {
+        return path;
+    }
+    // Windows does no normalization of its own once the prefix is present, so the separators
+    // and the dot segments are settled before it is added.
+    std::replace(target.begin(), target.end(), L'/', L'\\');
+    return std::filesystem::path(L"\\\\?\\" + target);
+#else
+    return path;
+#endif
+}
+
 std::filesystem::path home_directory() {
     if (const auto value = environment("HOME"); value.has_value()) {
         return from_native(*value);
@@ -1755,18 +1778,8 @@ PSID token_user_sid(std::vector<BYTE>& buffer) {
     return reinterpret_cast<TOKEN_USER*>(buffer.data())->User.Sid;
 }
 
-// Win32 path calls need the extended length form once a path passes MAX_PATH. Only
-// drive letter paths are rewritten; other forms are passed through unchanged.
-std::wstring extended_length(const std::filesystem::path& path) {
-    std::wstring native = path.wstring();
-    if (native.size() >= MAX_PATH && native.rfind(L"\\\\?\\", 0) != 0 && native.size() > 2 && native[1] == L':') {
-        native = L"\\\\?\\" + native;
-    }
-    return native;
-}
-
 void set_owner_only_dacl(const std::filesystem::path& path, PACL dacl) {
-    std::wstring native = extended_length(path);
+    std::wstring native = extended_path(path).wstring();
     const DWORD status = SetNamedSecurityInfoW(native.data(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, nullptr, nullptr, dacl, nullptr);
     if (status != ERROR_SUCCESS) {
         throw std::system_error(static_cast<int>(status), std::system_category(), "Unable to restrict an account data path to the current user");
@@ -1776,7 +1789,7 @@ void set_owner_only_dacl(const std::filesystem::path& path, PACL dacl) {
 // Links are never followed: a reparse point could point the grant at a directory
 // outside the account data, so it is left alone.
 void restrict_tree_recursive(const std::filesystem::path& path, PACL dacl) {
-    const std::wstring native = extended_length(path);
+    const std::wstring native = extended_path(path).wstring();
     const DWORD attributes = GetFileAttributesW(native.c_str());
     if (attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
         return;
@@ -1816,7 +1829,7 @@ bool path_private_to_current_user(const std::filesystem::path& path) {
         return false;
     }
     const PSID user = token_user_sid(*token_user);
-    std::wstring native = extended_length(path);
+    std::wstring native = extended_path(path).wstring();
     PACL dacl = nullptr;
     PSECURITY_DESCRIPTOR descriptor = nullptr;
     if (GetNamedSecurityInfoW(native.data(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, nullptr, nullptr, &dacl, nullptr, &descriptor) != ERROR_SUCCESS) {

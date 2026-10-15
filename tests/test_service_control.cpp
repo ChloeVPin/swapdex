@@ -326,8 +326,72 @@ void test_log_rotation() {
     swapdex::test::check(!std::filesystem::exists(log) && std::filesystem::exists(root / "service.log.1"), "A log over the limit was not rotated");
 }
 
+// Path shapes a Windows machine actually produces: a user name outside ASCII, a path past
+// MAX_PATH, and a destination another handle is holding open. Each one is exercised through
+// the same helpers the service uses for account data.
+void test_path_edges() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / ("swapdex-edges-" + swapdex::random_identifier(8));
+    struct Cleanup {
+        std::filesystem::path path;
+        ~Cleanup() {
+            std::error_code error;
+            std::filesystem::remove_all(path, error);
+        }
+    } cleanup{root};
+
+    // Non-ASCII arrives as UTF-8 and has to survive the conversion to the wide path the
+    // Windows file APIs take. The bytes are escaped rather than written out so the
+    // fixture does not depend on the compiler's execution charset.
+    const std::string accented = "\xc3\x9c" "n" "\xc3\xaf" "c" "\xc3\xb6" "d" "\xc3\xa9";
+    const std::string script = "\xe8\xb4\xa6\xe6\x88\xb7";
+    const std::filesystem::path unicode = root / swapdex::platform::from_native("Unicode-" + accented + "-" + script);
+    swapdex::ensure_account_directory(unicode);
+    swapdex::test::check(std::filesystem::is_directory(unicode), "A directory with non-ASCII characters was not created");
+    const std::filesystem::path unicode_file = unicode / swapdex::platform::from_native("auth-" + accented + ".json");
+    swapdex::write_file_atomically(unicode_file, "{\"label\":\"" + accented + "\"}\n", std::filesystem::perms::owner_read | std::filesystem::perms::owner_write);
+    swapdex::test::check(swapdex::read_file(unicode_file, 4096).find(accented) != std::string::npos, "Non-ASCII content did not round-trip through an account file");
+#if defined(_WIN32)
+    swapdex::test::check(swapdex::platform::path_private_to_current_user(unicode), "A non-ASCII account directory is not private");
+#endif
+
+    // A path beyond MAX_PATH. The account helpers reach it with the extended length form,
+    // and the file helpers have to cope with it too.
+    std::filesystem::path deep = root;
+    for (int index = 0; index < 6; ++index) {
+        deep /= "segment-" + std::string(40, 'x') + std::to_string(index);
+    }
+    swapdex::test::check(deep.string().size() > 260, "The long path fixture is not actually longer than MAX_PATH");
+    bool long_path_created = true;
+    try {
+        swapdex::ensure_account_directory(deep);
+        swapdex::write_file_atomically(deep / "auth.json", "long\n", std::filesystem::perms::owner_read | std::filesystem::perms::owner_write);
+    } catch (const std::exception&) {
+        long_path_created = false;
+    }
+    swapdex::test::check(long_path_created, "A path longer than MAX_PATH could not be created");
+    swapdex::test::check(swapdex::read_file(deep / "auth.json", 64) == "long\n", "A file beyond MAX_PATH did not round-trip");
+
+#if defined(_WIN32)
+    // A destination held open by another handle must be refused rather than half written.
+    const std::filesystem::path locked = root / "locked.json";
+    swapdex::write_file_atomically(locked, "original\n", std::filesystem::perms::owner_read | std::filesystem::perms::owner_write);
+    const HANDLE holder = CreateFileW(locked.wstring().c_str(), GENERIC_READ, 0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    swapdex::test::check(holder != INVALID_HANDLE_VALUE, "The lock holder could not open the account file");
+    bool refused = false;
+    try {
+        swapdex::write_file_atomically(locked, "replacement\n", std::filesystem::perms::owner_read | std::filesystem::perms::owner_write);
+    } catch (const std::exception&) {
+        refused = true;
+    }
+    CloseHandle(holder);
+    swapdex::test::check(refused, "A write over a file held by another handle was not refused");
+    swapdex::test::check(swapdex::read_file(locked, 4096) == "original\n", "A refused write damaged the existing account file");
+#endif
+}
+
 void test_platform_layer() {
     test_log_rotation();
+    test_path_edges();
     swapdex::test::check(!swapdex::platform::home_directory().empty(), "The home directory could not be resolved");
     swapdex::test::check(swapdex::platform::default_codex_home().is_absolute(), "The Codex home is not absolute");
     swapdex::test::check(swapdex::platform::default_electron_user_data().is_absolute(), "The Codex user data path is not absolute");
