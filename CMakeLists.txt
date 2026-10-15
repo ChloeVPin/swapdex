@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(swapdex VERSION 0.3.0 LANGUAGES CXX)
+project(swapdex VERSION 0.3.1 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 
@@ -122,7 +122,8 @@ endif()
     add_test(NAME cli_doctor_json COMMAND swapdex doctor --json)
     set_tests_properties(profile_store json_rpc app_server_refresh service_control maintenance_schedule service_control_exec platform_layer shutdown_channel app_windows settings_tabs shell_bridge account_root_scope start_reports_the_truth release_bundle_layout account_access_and_listeners cli_help cli_version cli_invalid cli_doctor_json PROPERTIES TIMEOUT 30)
     set_tests_properties(cli_help PROPERTIES PASS_REGULAR_EXPRESSION "swapdex install")
-    set_tests_properties(cli_version PROPERTIES PASS_REGULAR_EXPRESSION "0\\.3\\.0")
+    # Derived from the project version so a version bump cannot leave this assertion behind.
+    set_tests_properties(cli_version PROPERTIES PASS_REGULAR_EXPRESSION "${PROJECT_VERSION}")
     set_tests_properties(cli_invalid PROPERTIES WILL_FAIL TRUE)
     # doctor exits non zero on machines without an install, so only the report shape is checked.
     set_tests_properties(cli_doctor_json PROPERTIES PASS_REGULAR_EXPRESSION "checks")
