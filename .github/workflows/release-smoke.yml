@@ -1,0 +1,101 @@
+name: release smoke
+
+# This checks what a user actually receives, not what the build tree contains: it
+# downloads the published assets for a tag and runs the binary from each one. It runs
+# automatically once the release workflow finishes, and can also be dispatched against
+# an existing tag, which verifies a release without publishing anything new.
+on:
+  workflow_run:
+    workflows: [release]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Published release tag to verify, for example v0.3.1
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: ${{ matrix.name }}
+    # A manual dispatch names its own tag. An automatic run only follows a release that
+    # succeeded, because a failed release has nothing published to check.
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux
+            os: ubuntu-24.04
+            archive: swapdex-linux-x64.tar.gz
+          - name: linux-arm64
+            os: ubuntu-24.04-arm
+            archive: swapdex-linux-arm64.tar.gz
+          - name: macos
+            os: macos-latest
+            archive: swapdex-macos-arm64.tar.gz
+          - name: macos-x64
+            os: macos-15-intel
+            archive: swapdex-macos-x64.tar.gz
+          - name: windows
+            os: windows-latest
+            archive: swapdex-windows-x64.zip
+    env:
+      # head_branch carries the tag name for a tag triggered run, which is how the
+      # automatic path learns which release to verify.
+      TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.event.workflow_run.head_branch }}
+    steps:
+      - name: Download the published bundle
+        shell: bash
+        run: |
+          set -eu
+          base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}"
+          # Kept under its own name so extraction never depends on sniffing the format.
+          curl -fsSL "${base}/${{ matrix.archive }}" -o "${{ matrix.archive }}"
+          mkdir -p bundle
+          if [ "${RUNNER_OS}" = "Windows" ]; then
+            7z x -y "${{ matrix.archive }}" -obundle > /dev/null
+          else
+            tar -xzf bundle-download -C bundle
+          fi
+          for required in inject.js LICENSE; do
+            if ! find bundle -type f -name "${required}" | grep -q .; then
+              echo "::error::${required} is missing from ${{ matrix.archive }}"
+              exit 1
+            fi
+          done
+
+      - name: The published binary reports the released version
+        shell: bash
+        run: |
+          set -eu
+          expected="${TAG#v}"
+          binary="$(find bundle -type f \( -name swapdex -o -name swapdex.exe \) | head -n 1)"
+          if [ -z "${binary}" ]; then
+            echo "::error::${{ matrix.archive }} does not contain a Swapdex binary"
+            exit 1
+          fi
+          chmod +x "${binary}"
+          # The Windows binary writes CRLF, so the carriage return is stripped before the
+          # comparison instead of failing the string match on a trailing character.
+          reported="$("${binary}" version | tr -d '\r')"
+          echo "expected ${expected}, reported ${reported}"
+          if [ "${reported}" != "${expected}" ]; then
+            echo "::error::the published binary reports ${reported} but ${TAG} says ${expected}"
+            exit 1
+          fi
+
+      - name: The published installers are attached
+        shell: bash
+        run: |
+          set -eu
+          base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}"
+          for script in install.sh install.ps1; do
+            if ! curl -fsSLI -o /dev/null "${base}/${script}"; then
+              echo "::error::${script} is not attached to ${TAG}"
+              exit 1
+            fi
+          done
