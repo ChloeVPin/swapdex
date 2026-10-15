@@ -498,6 +498,8 @@ private:
         const std::filesystem::path log = runtime_.state_root / "service.log";
         std::error_code error;
         std::filesystem::create_directories(runtime_.state_root, error);
+        // Every start appends to the log, so it is rotated before the new run writes to it.
+        rotate_log_if_larger(log, 1024U * 1024U);
         return platform::spawn_detached({platform::to_native(runtime_.executable), "launch"}, log) ? 0 : 1;
     }
 

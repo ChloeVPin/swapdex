@@ -76,6 +76,19 @@ std::string read_link(const std::filesystem::path& path);
 void remove_file_durable(const std::filesystem::path& path);
 void sync_directory(const std::filesystem::path& path);
 
+// Access control for account data. On Windows the owner-only protection is a protected
+// DACL granting the current user's SID alone, so grants inherited from the profile
+// (SYSTEM, Administrators, Users) do not reach the data. POSIX builds keep their mode
+// bits, which ensure_directory already applies, so the restriction is a no-op there.
+bool path_private_to_current_user(const std::filesystem::path& path);
+void restrict_tree_to_current_user(const std::filesystem::path& root);
+// Text for a system error code, so a message says what failed instead of a number.
+std::string error_text(std::uint32_t code);
+// Whether the process listening on a loopback port is a Codex instance Swapdex may
+// attach to: owned by this user, running the same executable, and started with the
+// debugging port flag. Anything else on that port is someone else's application.
+bool loopback_listener_is_managed(unsigned short port, const std::filesystem::path& executable);
+
 // Advisory single instance lock backed by the platform primitive.
 class InstanceLock {
 public:

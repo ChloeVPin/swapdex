@@ -8,6 +8,7 @@
 #include <optional>
 #include <chrono>
 #include <string>
+#include <thread>
 #include <vector>
 #if !defined(_WIN32)
 #include <poll.h>
@@ -215,7 +216,116 @@ void test_maintenance_schedule() {
     swapdex::test::check(!swapdex::service_detail::should_run_maintenance(true, false, false), "The initial maintenance cycle ran while disabled");
 }
 
+// Account data must be readable only by the current user, and the debug port must be
+// held by a Codex instance this user started. Both are checked against real objects so
+// the check fails when the protection does not actually land.
+void test_account_access_and_listeners() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / ("swapdex-acl-" + swapdex::random_identifier(8));
+    struct Cleanup {
+        std::filesystem::path path;
+        ~Cleanup() {
+            std::error_code error;
+            std::filesystem::remove_all(path, error);
+        }
+    } cleanup{root};
+
+    // A directory made by the ordinary file system call keeps the profile's grants, which
+    // is exactly what account data must not keep.
+    const std::filesystem::path account = root / "account";
+    std::filesystem::create_directories(account);
+    const std::filesystem::path legacy_file = account / "auth.json";
+    {
+        std::ofstream stream(legacy_file, std::ios::binary);
+        stream << "{}\n";
+    }
+    swapdex::test::check(!swapdex::platform::path_private_to_current_user(account), "A default directory was reported as private");
+    swapdex::ensure_account_directory(account);
+    swapdex::test::check(swapdex::platform::path_private_to_current_user(account), "The account directory was not restricted to the current user");
+#if defined(_WIN32)
+    // The repair reaches data written before the check existed, not only new files.
+    swapdex::test::check(swapdex::platform::path_private_to_current_user(legacy_file), "Existing account data was not restricted by the repair");
+#endif
+    const std::filesystem::path later = account / "registry.json";
+    swapdex::write_file_atomically(later, "{}\n", std::filesystem::perms::owner_read | std::filesystem::perms::owner_write);
+    swapdex::test::check(swapdex::platform::path_private_to_current_user(later), "A file written under the account directory is not private");
+
+    // Only the caller's own listener may answer on the debug port: a second bind on the
+    // same port must fail, and a port released by its owner must be bindable again.
+    unsigned short port = 0;
+    const std::intptr_t listener = swapdex::websocket::listen_loopback(port);
+    swapdex::test::check(listener != swapdex::websocket::invalid_socket() && port != 0, "The loopback listener could not be bound");
+    unsigned short second_port = port;
+    const std::intptr_t intruder = swapdex::websocket::listen_loopback(second_port);
+    swapdex::test::check(intruder == swapdex::websocket::invalid_socket(), "A second listener was allowed onto a port that is already listening");
+    swapdex::websocket::close_socket(listener);
+    unsigned short rebind_port = port;
+    const std::intptr_t rebound = swapdex::websocket::listen_loopback(rebind_port);
+    swapdex::test::check(rebound != swapdex::websocket::invalid_socket(), "The port was not free to bind again after its listener closed");
+    swapdex::websocket::close_socket(rebound);
+
+#if defined(_WIN32)
+    // This test process is not a Codex instance: it is not the app image and carries no
+    // debug port flag, so it must not be accepted as the debug endpoint.
+    unsigned short claimed_port = 0;
+    const std::intptr_t own = swapdex::websocket::listen_loopback(claimed_port);
+    swapdex::test::check(own != swapdex::websocket::invalid_socket(), "The claim listener could not be bound");
+    swapdex::test::check(!swapdex::platform::loopback_listener_is_managed(claimed_port, "ChatGPT.exe"), "A listener without the Codex image or debug flag was accepted");
+    swapdex::test::check(!swapdex::platform::loopback_listener_is_managed(claimed_port, swapdex::platform::executable_path()), "A listener without the debug flag was accepted as Codex");
+    swapdex::websocket::close_socket(own);
+
+    // Positive control: an instance this user launched with the debug flag is accepted, so
+    // the refusal above cannot be refusing everything. The fake app is a child of this test
+    // and is the only process closed here.
+    const std::filesystem::path fake_app = SWAPDEX_FAKE_CDP_PATH;
+    const std::filesystem::path managed_profile = root / "managed-profile";
+    std::filesystem::create_directories(managed_profile);
+    const unsigned short managed_port = 39222;
+    const std::int64_t managed = swapdex::platform::launch_chatgpt(fake_app, {"--remote-debugging-port=39222", "--user-data-dir=" + managed_profile.string()});
+    swapdex::test::check(managed > 0, "The fake Codex instance could not be launched");
+    bool accepted = false;
+    for (int attempt = 0; attempt < 100 && !accepted; ++attempt) {
+        accepted = swapdex::platform::loopback_listener_is_managed(managed_port, fake_app);
+        if (!accepted) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+    }
+    swapdex::platform::close_process(managed);
+    swapdex::test::check(accepted, "A Codex instance started with the debug flag was refused");
+#endif
+
+    const std::string decoded = swapdex::platform::error_text(2);
+    swapdex::test::check(decoded.size() > 12 && decoded.find("(error 2)") != std::string::npos, "A system error code was not decoded to text");
+}
+
+// The service log is appended to by every start. Once it passes the limit it moves to
+// one previous generation, and a small log is left exactly where it is.
+void test_log_rotation() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / ("swapdex-log-" + swapdex::random_identifier(8));
+    std::filesystem::create_directories(root);
+    struct Cleanup {
+        std::filesystem::path path;
+        ~Cleanup() {
+            std::error_code error;
+            std::filesystem::remove_all(path, error);
+        }
+    } cleanup{root};
+    const std::filesystem::path log = root / "service.log";
+    {
+        std::ofstream stream(log, std::ios::binary);
+        stream << "small\n";
+    }
+    swapdex::rotate_log_if_larger(log, 1024);
+    swapdex::test::check(std::filesystem::exists(log) && !std::filesystem::exists(root / "service.log.1"), "A log under the limit was rotated");
+    {
+        std::ofstream stream(log, std::ios::binary);
+        stream << std::string(4096, 'x');
+    }
+    swapdex::rotate_log_if_larger(log, 1024);
+    swapdex::test::check(!std::filesystem::exists(log) && std::filesystem::exists(root / "service.log.1"), "A log over the limit was not rotated");
+}
+
 void test_platform_layer() {
+    test_log_rotation();
     swapdex::test::check(!swapdex::platform::home_directory().empty(), "The home directory could not be resolved");
     swapdex::test::check(swapdex::platform::default_codex_home().is_absolute(), "The Codex home is not absolute");
     swapdex::test::check(swapdex::platform::default_electron_user_data().is_absolute(), "The Codex user data path is not absolute");

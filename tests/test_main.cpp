@@ -18,6 +18,7 @@ void test_shell_bridge();
 void test_account_root_is_explicit();
 void test_start_reports_the_truth();
 void test_release_bundle_layout();
+void test_account_access_and_listeners();
 
 int main(int argc, char** argv) {
     const std::string filter = argc > 1 ? argv[1] : "";
@@ -36,6 +37,7 @@ int main(int argc, char** argv) {
         {"account_root_scope", test_account_root_is_explicit},
         {"start_reports_the_truth", test_start_reports_the_truth},
         {"release_bundle_layout", test_release_bundle_layout},
+        {"account_access_and_listeners", test_account_access_and_listeners},
     };
     std::size_t failures = 0;
     std::size_t matched = 0;

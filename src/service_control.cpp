@@ -5,6 +5,7 @@
 #include <thread>
 #include <filesystem>
 #include <iostream>
+#include <vector>
 
 #include "platform.hpp"
 #include "util.hpp"
@@ -230,7 +231,7 @@ int ServiceControl::install(bool start) {
     ensure_private_directory(paths_.manifest_file.parent_path());
     // launchd opens the service log before the service runs, so its directory has to
     // exist already rather than being created by the service itself.
-    ensure_private_directory(paths_.state_root);
+    ensure_account_directory(paths_.state_root);
     copy_file_atomically(paths_.source_executable, paths_.installed_executable, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write | std::filesystem::perms::owner_exec);
     copy_file_atomically(paths_.source_asset, paths_.installed_asset, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write | std::filesystem::perms::group_read | std::filesystem::perms::others_read);
     write_registration(*backend);
@@ -351,20 +352,26 @@ int ServiceControl::status() {
     return backend->status();
 }
 
-int ServiceControl::doctor() {
+int ServiceControl::doctor(bool json) {
     // A health check a user can paste into a bug report: every line says what was
     // looked at and what to do about it, and the exit code counts real failures.
-    std::cout << "swapdex " << SWAPDEX_VERSION << "\n";
+    // The checks are collected first so the text report for a person and the JSON
+    // report for a repair script come from the same list and cannot drift apart.
+    struct Check {
+        std::string level;
+        std::string message;
+    };
+    std::vector<Check> checks;
     int failures = 0;
     int warnings = 0;
-    const auto ok = [](const std::string& text) { std::cout << "ok    " << text << "\n"; };
-    const auto warn = [&warnings](const std::string& text) {
+    const auto ok = [&checks](const std::string& text) { checks.push_back({"ok", text}); };
+    const auto warn = [&checks, &warnings](const std::string& text) {
         ++warnings;
-        std::cout << "warn  " << text << "\n";
+        checks.push_back({"warn", text});
     };
-    const auto fail = [&failures](const std::string& text) {
+    const auto fail = [&checks, &failures](const std::string& text) {
         ++failures;
-        std::cout << "fail  " << text << "\n";
+        checks.push_back({"fail", text});
     };
 
     const std::unique_ptr<ServiceBackend> backend = make_service_backend(runtime(), runner_);
@@ -400,11 +407,12 @@ int ServiceControl::doctor() {
     }
 
     if (path_entry_exists(paths_.state_root)) {
-        const std::filesystem::perms exposed = std::filesystem::status(paths_.state_root).permissions() & (std::filesystem::perms::group_all | std::filesystem::perms::others_all);
-        if (exposed == std::filesystem::perms::none) {
-            ok("account data directory is private");
+        // Windows reports synthesized mode bits for directories, so the access list is
+        // read directly; that is the setting account data actually depends on.
+        if (platform::path_private_to_current_user(paths_.state_root)) {
+            ok("account data directory is private to this user");
         } else {
-            warn("account data directory " + paths_.state_root.string() + " is readable by other users");
+            warn("account data directory " + paths_.state_root.string() + " is readable by other accounts; run swapdex install to restrict it");
         }
     }
 
@@ -445,7 +453,23 @@ int ServiceControl::doctor() {
         warn(wanted + " is not on PATH; the swapdex command will not resolve there");
     }
 
-    std::cout << failures << " failure(s), " << warnings << " warning(s)\n";
+    if (json) {
+        nlohmann::json report;
+        report["version"] = SWAPDEX_VERSION;
+        report["failures"] = failures;
+        report["warnings"] = warnings;
+        report["checks"] = nlohmann::json::array();
+        for (const Check& check : checks) {
+            report["checks"].push_back({{"level", check.level}, {"message", check.message}});
+        }
+        std::cout << report.dump(2) << "\n";
+    } else {
+        std::cout << "swapdex " << SWAPDEX_VERSION << "\n";
+        for (const Check& check : checks) {
+            std::cout << check.level << std::string(6 - check.level.size(), ' ') << check.message << "\n";
+        }
+        std::cout << failures << " failure(s), " << warnings << " warning(s)\n";
+    }
     return failures == 0 ? 0 : 1;
 }
 

@@ -192,8 +192,8 @@ ProfileStore::ProfileStore(std::filesystem::path state_root, std::filesystem::pa
 
 void ProfileStore::initialize() {
     std::lock_guard lock(mutex_);
-    ensure_private_directory(state_root_);
-    ensure_private_directory(account_root_);
+    ensure_account_directory(state_root_);
+    ensure_account_directory(account_root_);
     ensure_private_directory(state_root_ / "profiles");
     ensure_private_directory(state_root_ / "onboarding");
     ensure_private_directory(state_root_ / "backups");

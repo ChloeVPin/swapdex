@@ -40,6 +40,14 @@ std::filesystem::path default_codex_home();
 std::filesystem::path default_electron_user_data();
 
 void ensure_private_directory(const std::filesystem::path& path);
+// For directories that hold Swapdex account data. Beyond the private mode, the owner-only
+// access list is applied to whatever is already there, so data written before the check
+// existed is repaired on the next run.
+void ensure_account_directory(const std::filesystem::path& path);
+// Keeps one previous generation of a log that has grown past the limit, so a log that
+// every start appends to cannot fill the disk. Failure is ignored: rotation must never
+// stop a start.
+void rotate_log_if_larger(const std::filesystem::path& log, std::uintmax_t maximum_bytes);
 void ensure_directory(const std::filesystem::path& path, std::filesystem::perms permissions);
 void write_file_atomically(const std::filesystem::path& path, std::string_view contents, std::filesystem::perms permissions);
 void copy_file_atomically(const std::filesystem::path& source, const std::filesystem::path& destination, std::filesystem::perms permissions);

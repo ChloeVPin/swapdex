@@ -166,6 +166,25 @@ void ensure_private_directory(const std::filesystem::path& path) {
     ensure_directory(path, std::filesystem::perms::owner_all);
 }
 
+void ensure_account_directory(const std::filesystem::path& path) {
+    ensure_private_directory(path);
+    if (!platform::path_private_to_current_user(path)) {
+        platform::restrict_tree_to_current_user(path);
+    }
+}
+
+void rotate_log_if_larger(const std::filesystem::path& log, std::uintmax_t maximum_bytes) {
+    std::error_code error;
+    const std::uintmax_t size = std::filesystem::file_size(log, error);
+    if (error || size <= maximum_bytes) {
+        return;
+    }
+    std::filesystem::path previous = log;
+    previous += ".1";
+    std::error_code rename_error;
+    std::filesystem::rename(log, previous, rename_error);
+}
+
 void write_file_atomically(const std::filesystem::path& path, std::string_view contents, std::filesystem::perms permissions) {
     const auto parent = parent_directory(path);
     ensure_private_directory(parent);
