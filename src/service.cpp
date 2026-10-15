@@ -137,7 +137,7 @@ int Service::run() {
     const std::filesystem::path& codex_home = paths.codex_home;
     const std::filesystem::path& electron_user_data = paths.electron_user_data;
     store_.emplace(state_root, default_account_root(), codex_home, electron_user_data);
-    ensure_private_directory(state_root);
+    ensure_account_directory(state_root);
     acquire_singleton_lock();
     store_->initialize();
     app_server_.emplace();
@@ -223,7 +223,7 @@ int Service::add(std::string label) {
     const std::filesystem::path& codex_home = paths.codex_home;
     const std::filesystem::path& electron_user_data = paths.electron_user_data;
     store_.emplace(state_root, default_account_root(), codex_home, electron_user_data);
-    ensure_private_directory(state_root);
+    ensure_account_directory(state_root);
     acquire_singleton_lock();
     store_->initialize();
     app_server_.emplace();

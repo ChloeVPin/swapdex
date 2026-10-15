@@ -2,6 +2,11 @@
 
 #include "platform.hpp"
 
+#if defined(_WIN32)
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#endif
+
 #include <algorithm>
 #include <array>
 #include <cerrno>
@@ -27,6 +32,58 @@ namespace {
 constexpr std::size_t maximum_cdp_frame_bytes = 16U * 1024U * 1024U;
 
 #if defined(_WIN32)
+std::string fetch_http_text(const std::string& target_host, int target_port, const std::string& target_path, int timeout_ms) {
+    WSADATA wsa;
+    if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
+        return std::string();
+    }
+    SOCKET socket_descriptor = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (socket_descriptor == INVALID_SOCKET) {
+        WSACleanup();
+        return std::string();
+    }
+    const int receive_timeout = timeout_ms;
+    setsockopt(socket_descriptor, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&receive_timeout), sizeof(receive_timeout));
+    setsockopt(socket_descriptor, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char*>(&receive_timeout), sizeof(receive_timeout));
+    sockaddr_in address {};
+    address.sin_family = AF_INET;
+    address.sin_port = htons(static_cast<unsigned short>(target_port));
+    if (inet_pton(AF_INET, target_host.c_str(), &address.sin_addr) != 1) {
+        closesocket(socket_descriptor);
+        WSACleanup();
+        return std::string();
+    }
+    if (connect(socket_descriptor, reinterpret_cast<const sockaddr*>(&address), sizeof(address)) != 0) {
+        closesocket(socket_descriptor);
+        WSACleanup();
+        return std::string();
+    }
+    const std::string request = "GET " + target_path + " HTTP/1.1\r\nHost: " + target_host + "\r\nConnection: close\r\n\r\n";
+    const int sent = send(socket_descriptor, request.c_str(), static_cast<int>(request.size()), 0);
+    if (sent <= 0) {
+        closesocket(socket_descriptor);
+        WSACleanup();
+        return std::string();
+    }
+    std::string response;
+    std::array<char, 4096> buffer {};
+    while (true) {
+        const int received = recv(socket_descriptor, buffer.data(), static_cast<int>(buffer.size()), 0);
+        if (received > 0) {
+            response.append(buffer.data(), static_cast<std::size_t>(received));
+        } else {
+            break;
+        }
+    }
+    closesocket(socket_descriptor);
+    WSACleanup();
+    const std::size_t separator = response.find("\r\n\r\n");
+    if (separator == std::string::npos) {
+        return std::string();
+    }
+    return response.substr(separator + 4);
+}
+
 void close_socket(std::intptr_t& socket) {
     if (socket != websocket::invalid_socket()) {
         websocket::close_socket(socket);
@@ -111,8 +168,60 @@ void CdpPipe::start() {
     }
     if (port == 0 || ws_path.empty()) {
         terminate_child();
-        throw Error("cdp_spawn_failed", "The Codex desktop application did not publish its debug endpoint");
+        // Some Windows builds of the packaged Codex app do not write
+        // DevToolsActivePort. Those builds still answer a fixed debugging port
+        // through the ordinary DevTools HTTP endpoint, so try a second managed
+        // launch on that port before treating startup as failed.
+        constexpr unsigned short fallback_port = 9222;
+        const std::vector<std::string> fallback_arguments = {
+            "--remote-debugging-port=" + std::to_string(fallback_port),
+            "--user-data-dir=" + electron_user_data_.string(),
+        };
+        pid_ = platform::launch_chatgpt(executable_, fallback_arguments);
+        if (pid_ <= 0) {
+            throw Error("cdp_spawn_failed", "Unable to start the Codex desktop application");
+        }
+        process_group_ = pid_;
+        std::string fallback_path;
+        const auto fallback_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(90);
+        while (std::chrono::steady_clock::now() < fallback_deadline) {
+            const std::string body = fetch_http_text("127.0.0.1", fallback_port, "/json/version", 200);
+            const std::size_t key = body.find("\"webSocketDebuggerUrl\"");
+            if (key != std::string::npos) {
+                const std::size_t value_start = body.find('"', body.find(':', key));
+                const std::size_t value_end = body.find('"', value_start + 1);
+                if (value_start != std::string::npos && value_end != std::string::npos) {
+                    const std::string value = body.substr(value_start + 1, value_end - value_start - 1);
+                    const std::string prefix = "ws://127.0.0.1:" + std::to_string(fallback_port);
+                    if (value.rfind(prefix, 0) == 0U) {
+                        fallback_path = value.substr(prefix.size());
+                    }
+                }
+            }
+            if (!fallback_path.empty()) {
+                break;
+            }
+            if (!platform::process_is_alive(pid_)) {
+                pid_ = -1;
+                process_group_ = -1;
+                throw Error("cdp_spawn_failed", "The Codex desktop application exited during startup");
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(250));
+        }
+        if (fallback_path.empty()) {
+            terminate_child();
+            throw Error("cdp_spawn_failed", "The Codex desktop application did not publish its debug endpoint");
+        }
+        // The fixed port may already belong to another application. Its endpoint answers
+        // the same way, so the answer alone is not proof that the app we launched owns it.
+        if (!platform::loopback_listener_is_managed(fallback_port, executable_)) {
+            terminate_child();
+            throw Error("cdp_port_claimed", "Port 9222 is already used by another application, so Codex was not attached");
+        }
+        port = fallback_port;
+        ws_path = fallback_path;
     }
+
     // The port file can appear before the DevTools listener is bound, so retry
     // the connect+handshake until the listener is actually answering.
     std::optional<websocket::WebSocket> socket;

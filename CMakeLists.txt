@@ -49,7 +49,7 @@ target_compile_definitions(swapdex_core PUBLIC
 )
 
 if(WIN32)
-    target_link_libraries(swapdex_core PUBLIC advapi32 ws2_32 bcrypt ole32)
+    target_link_libraries(swapdex_core PUBLIC advapi32 ws2_32 bcrypt ole32 iphlpapi)
 endif()
 target_compile_definitions(swapdex_core PRIVATE
     SWAPDEX_INJECT_SCRIPT_PATH="${PROJECT_SOURCE_DIR}/assets/inject.js"
@@ -117,11 +117,23 @@ endif()
     add_test(NAME release_bundle_layout COMMAND swapdex_tests release_bundle_layout)
     add_test(NAME cli_help COMMAND swapdex --help)
     add_test(NAME cli_version COMMAND swapdex version)
+    add_test(NAME account_access_and_listeners COMMAND swapdex_tests account_access_and_listeners)
     add_test(NAME cli_invalid COMMAND swapdex invalid-command)
-    set_tests_properties(profile_store json_rpc app_server_refresh service_control maintenance_schedule service_control_exec platform_layer shutdown_channel app_windows settings_tabs shell_bridge account_root_scope start_reports_the_truth release_bundle_layout cli_help cli_version cli_invalid PROPERTIES TIMEOUT 30)
+    add_test(NAME cli_doctor_json COMMAND swapdex doctor --json)
+    set_tests_properties(profile_store json_rpc app_server_refresh service_control maintenance_schedule service_control_exec platform_layer shutdown_channel app_windows settings_tabs shell_bridge account_root_scope start_reports_the_truth release_bundle_layout account_access_and_listeners cli_help cli_version cli_invalid cli_doctor_json PROPERTIES TIMEOUT 30)
     set_tests_properties(cli_help PROPERTIES PASS_REGULAR_EXPRESSION "swapdex install")
     set_tests_properties(cli_version PROPERTIES PASS_REGULAR_EXPRESSION "0\\.3\\.0")
     set_tests_properties(cli_invalid PROPERTIES WILL_FAIL TRUE)
+    # doctor exits non zero on machines without an install, so only the report shape is checked.
+    set_tests_properties(cli_doctor_json PROPERTIES PASS_REGULAR_EXPRESSION "checks")
+
+    add_executable(swapdex_bench EXCLUDE_FROM_ALL tests/bench_platform.cpp)
+    target_link_libraries(swapdex_bench PRIVATE swapdex_core)
+    if(MSVC)
+    target_compile_options(swapdex_bench PRIVATE /W4 /WX)
+else()
+    target_compile_options(swapdex_bench PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
 
     add_executable(swapdex_live_probe EXCLUDE_FROM_ALL tests/live_cdp_probe.cpp)
     target_link_libraries(swapdex_live_probe PRIVATE swapdex_core)

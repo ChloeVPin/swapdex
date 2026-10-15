@@ -47,6 +47,19 @@ int main(int argc, char** argv) {
         return 1;
     }
     unsigned short port = 0;
+    for (int i = 1; i < argc; ++i) {
+        const std::string argument(argv[i]);
+        const std::string_view prefix = "--remote-debugging-port=";
+        if (argument.rfind(std::string(prefix), 0) == 0) {
+            try {
+                const int parsed = std::stoi(argument.substr(prefix.size()));
+                if (parsed > 0 && parsed <= 65535) {
+                    port = static_cast<unsigned short>(parsed);
+                }
+            } catch (...) {
+            }
+        }
+    }
     const std::intptr_t listener = swapdex::websocket::listen_loopback(port);
     if (listener == swapdex::websocket::invalid_socket()) {
         return 1;

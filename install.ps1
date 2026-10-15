@@ -84,15 +84,10 @@ try {
         exit 1
     }
 
-    $target = Join-Path $env:APPDATA "swapdex"
-    New-Item -ItemType Directory -Path $target -Force | Out-Null
-    Copy-Item -Path $binary.FullName -Destination (Join-Path $target "swapdex.exe") -Force
-    $assetSource = Join-Path (Split-Path $binary.FullName) "inject.js"
-    if (Test-Path $assetSource) {
-        Copy-Item -Path $assetSource -Destination (Join-Path $target "inject.js") -Force
-    }
-
-    & (Join-Path $target "swapdex.exe") install
+    # Run the installer from the extracted build so its source paths point at the
+    # downloaded binary rather than at the destination being replaced. The install
+    # command itself copies both the executable and inject.js into their homes.
+    & $binary.FullName install
     if ($LASTEXITCODE -ne 0) {
         Write-Host "swapdex: installation did not finish" -ForegroundColor Red
         exit $LASTEXITCODE

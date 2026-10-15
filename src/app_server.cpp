@@ -253,7 +253,7 @@ private:
             const DWORD launch_error = GetLastError();
             CloseHandle(child_stdin_write);
             CloseHandle(child_stdout_read);
-            throw Error("app_server_spawn_failed", "Unable to start the bundled Codex app-server (win32 error " + std::to_string(static_cast<unsigned long>(launch_error)) + ")");
+            throw Error("app_server_spawn_failed", "Unable to start the bundled Codex app-server: " + platform::error_text(static_cast<std::uint32_t>(launch_error)));
         }
         CloseHandle(info.hThread);
         process_handle_ = info.hProcess;

@@ -120,6 +120,16 @@ std::intptr_t listen_loopback(unsigned short& bound_port) {
     address.sin_family = AF_INET;
     address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     address.sin_port = htons(bound_port);
+#if defined(_WIN32)
+    // On Windows SO_REUSEADDR lets a second process bind a port that is already being
+    // listened on, which is how another application could take the debug port.
+    // SO_EXCLUSIVEADDRUSE makes that bind fail instead.
+    int exclusive = 1;
+    ::setsockopt(socket, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, reinterpret_cast<const char*>(&exclusive), sizeof(exclusive));
+#else
+    int reuse = 1;
+    ::setsockopt(socket, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&reuse), sizeof(reuse));
+#endif
     if (::bind(socket, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0 || ::listen(socket, 4) != 0) {
         ::closesocket(socket);
         return invalid_socket();

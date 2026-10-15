@@ -16,7 +16,7 @@ void print_usage() {
               << "  swapdex start [--close-app]\n"
               << "  swapdex stop\n"
               << "  swapdex status\n"
-              << "  swapdex doctor\n"
+              << "  swapdex doctor [--json]\n"
               << "  swapdex uninstall [--purge-data]\n"
               << "  swapdex launch\n"
               << "  swapdex list\n"
@@ -60,9 +60,9 @@ int main(int argc, char** argv) {
             swapdex::ServiceControl control;
             return control.status();
         }
-        if (command == "doctor" && arguments.size() == 1) {
+        if (command == "doctor" && (arguments.size() == 1 || (arguments.size() == 2 && arguments[1] == "--json"))) {
             swapdex::ServiceControl control;
-            return control.doctor();
+            return control.doctor(arguments.size() == 2);
         }
         if (command == "uninstall" && (arguments.size() == 1 || (arguments.size() == 2 && arguments[1] == "--purge-data"))) {
             swapdex::ServiceControl control;

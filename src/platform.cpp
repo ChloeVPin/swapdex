@@ -33,6 +33,10 @@
 #include <ws2tcpip.h>
 #include <tlhelp32.h>
 #include <shobjidl.h>
+#include <appmodel.h>
+#include <aclapi.h>
+#include <iphlpapi.h>
+#include <sddl.h>
 #else
 // Linux and macOS share the same base headers. Only the extras differ, so they are
 // added on top rather than replacing the shared set.
@@ -391,7 +395,7 @@ std::optional<std::wstring> process_command_line(DWORD pid) {
 // Every ChatGPT.exe in the snapshot. The browser process carries no --type= flag;
 // its renderer and utility children do, so the filter is just the exe name plus a
 // command line check on the caller's side.
-std::vector<ObservedProcess> enumerate_chatgpt_processes() {
+std::vector<ObservedProcess> enumerate_chatgpt_processes(bool read_command_lines) {
     std::vector<ObservedProcess> processes;
     const HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (snapshot == INVALID_HANDLE_VALUE) {
@@ -413,8 +417,10 @@ std::vector<ObservedProcess> enumerate_chatgpt_processes() {
         observed.pid = static_cast<std::int64_t>(entry.th32ProcessID);
         observed.parent = static_cast<std::int64_t>(entry.th32ParentProcessID);
         observed.executable = entry.szExeFile;
-        if (auto command_line = process_command_line(entry.th32ProcessID); command_line.has_value()) {
-            observed.command_line = std::move(*command_line);
+        if (read_command_lines) {
+            if (auto command_line = process_command_line(entry.th32ProcessID); command_line.has_value()) {
+                observed.command_line = std::move(*command_line);
+            }
         }
         processes.push_back(std::move(observed));
     }
@@ -511,22 +517,35 @@ StartedProcess create_child_process(const std::filesystem::path& executable, con
 // Versions sort inside the package directory name, so the newest install wins.
 std::vector<std::filesystem::path> packaged_chatgpt_candidates() {
     std::vector<std::filesystem::path> found;
-    const std::filesystem::path windows_apps = std::filesystem::path(windows_environment("ProgramFiles").value_or("C:\\Program Files")) / "WindowsApps";
-    std::error_code error;
-    if (!std::filesystem::is_directory(windows_apps, error) || error) {
-        return found;
-    }
-    for (const auto& entry : std::filesystem::directory_iterator(windows_apps, error)) {
-        if (error) {
-            break;
-        }
-        const std::wstring name = entry.path().filename().wstring();
-        if (name.rfind(L"OpenAI.Codex_", 0) != 0) {
-            continue;
-        }
-        const std::filesystem::path executable = entry.path() / "app" / "ChatGPT.exe";
-        if (std::filesystem::is_regular_file(executable, error) && !error) {
-            found.push_back(executable);
+    const std::wstring package_family = L"OpenAI.Codex_2p2nqsd0c76g0";
+    UINT32 package_count = 0;
+    UINT32 buffer_length = 0;
+    if (FindPackagesByPackageFamily(package_family.c_str(), PACKAGE_FILTER_HEAD, &package_count, nullptr, &buffer_length, nullptr, nullptr) == ERROR_INSUFFICIENT_BUFFER
+        && package_count > 0U && buffer_length > 0U) {
+        std::vector<WCHAR> buffer(buffer_length);
+        std::vector<PWSTR> packages(package_count);
+        if (FindPackagesByPackageFamily(package_family.c_str(), PACKAGE_FILTER_HEAD, &package_count, packages.data(), &buffer_length, buffer.data(), nullptr) == ERROR_SUCCESS) {
+            for (UINT32 index = 0; index < package_count; ++index) {
+                if (packages[index] == nullptr) {
+                    continue;
+                }
+                UINT32 path_length = 0;
+                if (GetPackagePathByFullName(packages[index], &path_length, nullptr) != ERROR_INSUFFICIENT_BUFFER || path_length == 0U) {
+                    continue;
+                }
+                std::vector<WCHAR> path(path_length);
+                if (GetPackagePathByFullName(packages[index], &path_length, path.data()) == ERROR_SUCCESS) {
+                    const std::filesystem::path executable = std::filesystem::path(path.data()) / "app" / "ChatGPT.exe";
+                    std::error_code error;
+                    // The package manager vouches for the install. WindowsApps can deny a
+                    // stat to a normal user even when the app is there, so a denied probe
+                    // still counts and launch goes through package activation.
+                    const bool present = std::filesystem::is_regular_file(executable, error);
+                    if ((present && !error) || error.value() == static_cast<int>(ERROR_ACCESS_DENIED)) {
+                        found.push_back(executable);
+                    }
+                }
+            }
         }
     }
     std::sort(found.begin(), found.end(), [](const std::filesystem::path& a, const std::filesystem::path& b) {
@@ -1531,14 +1550,22 @@ std::optional<std::int64_t> running_unmanaged_chatgpt(std::int64_t managed_proce
     // can only exclude the caller itself and its directly spawned children. Orphaned
     // managed apps are returned on purpose: the caller sorts them from foreign apps
     // with chatgpt_process_is_managed and reclaims them.
-    for (const auto& process : enumerate_chatgpt_processes()) {
-        if (!is_browser_process(process)) {
-            continue;
-        }
+    // The snapshot alone identifies Chromium children, because each is parented by the
+    // browser process. Only the remaining candidates have their command line read, and
+    // that read is the expensive part when several renderers are open.
+    const std::vector<ObservedProcess> snapshot = enumerate_chatgpt_processes(false);
+    for (const auto& process : snapshot) {
         if (managed_process_group >= 0 && (process.pid == managed_process_group || process.parent == managed_process_group)) {
             continue;
         }
-        return process.pid;
+        const bool child_of_chatgpt = std::any_of(snapshot.begin(), snapshot.end(), [&](const ObservedProcess& other) { return other.pid == process.parent; });
+        if (child_of_chatgpt) {
+            continue;
+        }
+        const auto command_line = process_command_line(static_cast<DWORD>(process.pid));
+        if (command_line.has_value() && !command_line_has(*command_line, L"--type=")) {
+            return process.pid;
+        }
     }
     return std::nullopt;
 #elif defined(__APPLE__)
@@ -1695,11 +1722,261 @@ void registry_delete(const std::wstring& key_path, const std::wstring& name) {
 #endif
 }
 
+// ------ Access control and listeners ------
+
+namespace {
+
+#if defined(_WIN32)
+
+// The current user's token user record. The SID lives inside it, so the caller keeps
+// the buffer alive for as long as it uses the SID.
+std::optional<std::vector<BYTE>> current_token_user() {
+    HANDLE token = nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) {
+        return std::nullopt;
+    }
+    struct Guard {
+        HANDLE handle;
+        ~Guard() { CloseHandle(handle); }
+    } guard{token};
+    DWORD needed = 0;
+    GetTokenInformation(token, TokenUser, nullptr, 0, &needed);
+    if (needed == 0) {
+        return std::nullopt;
+    }
+    std::vector<BYTE> buffer(needed);
+    if (!GetTokenInformation(token, TokenUser, buffer.data(), needed, &needed)) {
+        return std::nullopt;
+    }
+    return buffer;
+}
+
+PSID token_user_sid(std::vector<BYTE>& buffer) {
+    return reinterpret_cast<TOKEN_USER*>(buffer.data())->User.Sid;
+}
+
+// Win32 path calls need the extended length form once a path passes MAX_PATH. Only
+// drive letter paths are rewritten; other forms are passed through unchanged.
+std::wstring extended_length(const std::filesystem::path& path) {
+    std::wstring native = path.wstring();
+    if (native.size() >= MAX_PATH && native.rfind(L"\\\\?\\", 0) != 0 && native.size() > 2 && native[1] == L':') {
+        native = L"\\\\?\\" + native;
+    }
+    return native;
+}
+
+void set_owner_only_dacl(const std::filesystem::path& path, PACL dacl) {
+    std::wstring native = extended_length(path);
+    const DWORD status = SetNamedSecurityInfoW(native.data(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, nullptr, nullptr, dacl, nullptr);
+    if (status != ERROR_SUCCESS) {
+        throw std::system_error(static_cast<int>(status), std::system_category(), "Unable to restrict an account data path to the current user");
+    }
+}
+
+// Links are never followed: a reparse point could point the grant at a directory
+// outside the account data, so it is left alone.
+void restrict_tree_recursive(const std::filesystem::path& path, PACL dacl) {
+    const std::wstring native = extended_length(path);
+    const DWORD attributes = GetFileAttributesW(native.c_str());
+    if (attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
+        return;
+    }
+    set_owner_only_dacl(path, dacl);
+    if ((attributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
+        return;
+    }
+    std::error_code error;
+    std::filesystem::directory_iterator entry(path, error);
+    const std::filesystem::directory_iterator end;
+    for (; !error && entry != end; entry.increment(error)) {
+        restrict_tree_recursive(entry->path(), dacl);
+    }
+}
+
+std::wstring lowercase(std::wstring text) {
+    std::transform(text.begin(), text.end(), text.begin(), [](wchar_t c) { return static_cast<wchar_t>(towlower(c)); });
+    return text;
+}
+
+// Paths compare equal across separator style and letter case, since configuration can
+// hand over either form and the process image path always uses backslashes.
+std::wstring comparable_path(std::wstring text) {
+    std::replace(text.begin(), text.end(), L'/', L'\\');
+    return lowercase(std::move(text));
+}
+
+#endif
+
+}
+
+bool path_private_to_current_user(const std::filesystem::path& path) {
+#if defined(_WIN32)
+    auto token_user = current_token_user();
+    if (!token_user.has_value()) {
+        return false;
+    }
+    const PSID user = token_user_sid(*token_user);
+    std::wstring native = extended_length(path);
+    PACL dacl = nullptr;
+    PSECURITY_DESCRIPTOR descriptor = nullptr;
+    if (GetNamedSecurityInfoW(native.data(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, nullptr, nullptr, &dacl, nullptr, &descriptor) != ERROR_SUCCESS) {
+        return false;
+    }
+    struct Guard {
+        PSECURITY_DESCRIPTOR descriptor;
+        ~Guard() {
+            if (descriptor != nullptr) {
+                LocalFree(descriptor);
+            }
+        }
+    } guard{descriptor};
+    // A missing DACL grants everyone full access.
+    if (dacl == nullptr) {
+        return false;
+    }
+    ACL_SIZE_INFORMATION sizes{};
+    if (!GetAclInformation(dacl, &sizes, sizeof(sizes), AclSizeInformation)) {
+        return false;
+    }
+    for (DWORD index = 0; index < sizes.AceCount; ++index) {
+        LPVOID ace = nullptr;
+        if (!GetAce(dacl, index, &ace)) {
+            return false;
+        }
+        const auto* header = static_cast<const ACE_HEADER*>(ace);
+        if (header->AceType == ACCESS_DENIED_ACE_TYPE || header->AceType == SYSTEM_AUDIT_ACE_TYPE) {
+            continue;
+        }
+        // Swapdex only writes plain allow ACEs, so object and callback grants are
+        // treated as a reason to restrict rather than trusted.
+        if (header->AceType != ACCESS_ALLOWED_ACE_TYPE) {
+            return false;
+        }
+        const auto* allowed = static_cast<const ACCESS_ALLOWED_ACE*>(ace);
+        const PSID sid = reinterpret_cast<PSID>(const_cast<DWORD*>(&allowed->SidStart));
+        if (allowed->Mask != 0 && !EqualSid(sid, user)) {
+            return false;
+        }
+    }
+    return true;
+#else
+    struct stat status {};
+    if (::stat(path.c_str(), &status) != 0 || status.st_uid != getuid()) {
+        return false;
+    }
+    return (status.st_mode & (S_IRWXG | S_IRWXO)) == 0;
+#endif
+}
+
+void restrict_tree_to_current_user(const std::filesystem::path& root) {
+#if defined(_WIN32)
+    auto token_user = current_token_user();
+    if (!token_user.has_value()) {
+        throw std::system_error(static_cast<int>(GetLastError()), std::system_category(), "Unable to read the current user");
+    }
+    LPWSTR sid_text = nullptr;
+    if (!ConvertSidToStringSidW(token_user_sid(*token_user), &sid_text)) {
+        throw std::system_error(static_cast<int>(GetLastError()), std::system_category(), "Unable to read the current user");
+    }
+    const std::wstring sddl = std::wstring(L"D:P(A;OICI;FA;;;") + sid_text + L")";
+    LocalFree(sid_text);
+    PSECURITY_DESCRIPTOR descriptor = nullptr;
+    if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.c_str(), SDDL_REVISION_1, &descriptor, nullptr)) {
+        throw std::system_error(static_cast<int>(GetLastError()), std::system_category(), "Unable to build the owner-only access list");
+    }
+    struct Guard {
+        PSECURITY_DESCRIPTOR descriptor;
+        ~Guard() { LocalFree(descriptor); }
+    } guard{descriptor};
+    BOOL present = FALSE;
+    BOOL defaulted = FALSE;
+    PACL dacl = nullptr;
+    if (!GetSecurityDescriptorDacl(descriptor, &present, &dacl, &defaulted) || present == FALSE || dacl == nullptr) {
+        throw std::system_error(static_cast<int>(GetLastError()), std::system_category(), "Unable to build the owner-only access list");
+    }
+    restrict_tree_recursive(root, dacl);
+#else
+    // POSIX modes are applied by ensure_directory, so there is nothing to add here.
+    static_cast<void>(root);
+#endif
+}
+
+std::string error_text(std::uint32_t code) {
+    // The system category decodes through FormatMessage on Windows and through strerror
+    // elsewhere, so one call covers both.
+    std::string text = std::system_category().message(static_cast<int>(code));
+    while (!text.empty() && (text.back() == '\r' || text.back() == '\n' || text.back() == '.' || text.back() == ' ')) {
+        text.pop_back();
+    }
+    return text + " (error " + std::to_string(code) + ")";
+}
+
+bool loopback_listener_is_managed(unsigned short port, const std::filesystem::path& executable) {
+#if defined(_WIN32)
+    ULONG size = 0;
+    if (GetExtendedTcpTable(nullptr, &size, FALSE, AF_INET, TCP_TABLE_OWNER_PID_LISTENER, 0) != ERROR_INSUFFICIENT_BUFFER) {
+        return false;
+    }
+    std::vector<BYTE> table(size);
+    if (GetExtendedTcpTable(table.data(), &size, FALSE, AF_INET, TCP_TABLE_OWNER_PID_LISTENER, 0) != NO_ERROR) {
+        return false;
+    }
+    const auto* rows = reinterpret_cast<const MIB_TCPTABLE_OWNER_PID*>(table.data());
+    std::optional<DWORD> owner;
+    for (DWORD index = 0; index < rows->dwNumEntries && !owner.has_value(); ++index) {
+        const MIB_TCPROW_OWNER_PID& row = rows->table[index];
+        const bool loopback = row.dwLocalAddr == htonl(INADDR_LOOPBACK) || row.dwLocalAddr == 0;
+        if (loopback && ntohs(static_cast<unsigned short>(row.dwLocalPort)) == port) {
+            owner = row.dwOwningPid;
+        }
+    }
+    if (!owner.has_value()) {
+        return false;
+    }
+    // A process this user cannot open is never one Swapdex started.
+    const HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, *owner);
+    if (process == nullptr) {
+        return false;
+    }
+    struct Guard {
+        HANDLE handle;
+        ~Guard() { CloseHandle(handle); }
+    } guard{process};
+    std::vector<wchar_t> image(32768);
+    DWORD image_length = static_cast<DWORD>(image.size());
+    if (!QueryFullProcessImageNameW(process, 0, image.data(), &image_length)) {
+        return false;
+    }
+    if (comparable_path(std::wstring(image.data(), image_length)) != comparable_path(executable.wstring())) {
+        return false;
+    }
+    const auto command_line = process_command_line(*owner);
+    return command_line.has_value() && command_line_has(*command_line, L"--remote-debugging-port=" + std::to_wstring(port));
+#else
+    // POSIX keeps its prior behavior: the debug port is only reached through the
+    // owner-only socket the app opens, and no process-to-port lookup is wired up here.
+    static_cast<void>(port);
+    static_cast<void>(executable);
+    return true;
+#endif
+}
+
 std::int64_t launch_chatgpt(const std::filesystem::path& executable, const std::vector<std::string>& arguments) {
 #if defined(_WIN32)
+    // A direct spawn of the packaged executable returns the browser process itself, and
+    // the debug endpoint and liveness checks belong to that process. Activation returns a
+    // broker id that can exit while the app keeps running, which made a healthy launch look
+    // like it had exited. Activation is therefore only the fallback when a spawn is refused.
+    const StartedProcess direct = create_child_process(executable, arguments, nullptr, nullptr, nullptr, CREATE_NO_WINDOW);
+    if (direct.started) {
+        const std::int64_t direct_pid = static_cast<std::int64_t>(direct.info.dwProcessId);
+        CloseHandle(direct.info.hThread);
+        CloseHandle(direct.info.hProcess);
+        return direct_pid;
+    }
     if (const auto identity = package_identity_for(executable); identity.has_value()) {
-        // Packaged apps cannot be spawned directly; the package manager owns their
-        // lifetime. Activation is also what the shell itself does.
+        // The package manager owns the lifetime of an activated app, which is also what
+        // the shell does when the app is opened from the Start menu.
         if (CoInitializeEx(nullptr, COINIT_MULTITHREADED) == RPC_E_CHANGED_MODE) {
             CoUninitialize();
             if (CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED) < 0) {
@@ -1723,16 +2000,7 @@ std::int64_t launch_chatgpt(const std::filesystem::path& executable, const std::
         manager->Release();
         return SUCCEEDED(activated) ? static_cast<std::int64_t>(pid) : 0;
     }
-    // Anything else, most importantly the test double, is a plain executable.
-    const std::filesystem::path target = executable.parent_path() / executable.filename();
-    const StartedProcess child = create_child_process(target, arguments, nullptr, nullptr, nullptr, CREATE_NO_WINDOW);
-    if (!child.started) {
-        return 0;
-    }
-    const std::int64_t pid = static_cast<std::int64_t>(child.info.dwProcessId);
-    CloseHandle(child.info.hThread);
-    CloseHandle(child.info.hProcess);
-    return pid;
+    return 0;
 #else
     static_cast<void>(executable);
     static_cast<void>(arguments);

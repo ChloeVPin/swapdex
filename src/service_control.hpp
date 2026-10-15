@@ -58,7 +58,8 @@ public:
     int start(bool close_app = false);
     int stop();
     int status();
-    int doctor();
+    // json selects the machine readable report for repair scripts; the text form is for people.
+    int doctor(bool json = false);
     int uninstall(bool purge_data = false);
 
 private:
