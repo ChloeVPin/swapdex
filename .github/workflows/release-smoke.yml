@@ -59,7 +59,7 @@ jobs:
           if [ "${RUNNER_OS}" = "Windows" ]; then
             7z x -y "${{ matrix.archive }}" -obundle > /dev/null
           else
-            tar -xzf bundle-download -C bundle
+            tar -xzf "${{ matrix.archive }}" -C bundle
           fi
           for required in inject.js LICENSE; do
             if ! find bundle -type f -name "${required}" | grep -q .; then
