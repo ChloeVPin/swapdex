@@ -249,6 +249,9 @@ void test_account_access_and_listeners() {
     swapdex::write_file_atomically(later, "{}\n", std::filesystem::perms::owner_read | std::filesystem::perms::owner_write);
     swapdex::test::check(swapdex::platform::path_private_to_current_user(later), "A file written under the account directory is not private");
 
+    // The loopback listener is a no-op on POSIX, where Codex is reached over the debug
+    // pipe instead, so the socket checks below only apply on Windows.
+#if defined(_WIN32)
     // Only the caller's own listener may answer on the debug port: a second bind on the
     // same port must fail, and a port released by its owner must be bindable again.
     unsigned short port = 0;
@@ -263,7 +266,6 @@ void test_account_access_and_listeners() {
     swapdex::test::check(rebound != swapdex::websocket::invalid_socket(), "The port was not free to bind again after its listener closed");
     swapdex::websocket::close_socket(rebound);
 
-#if defined(_WIN32)
     // This test process is not a Codex instance: it is not the app image and carries no
     // debug port flag, so it must not be accepted as the debug endpoint.
     unsigned short claimed_port = 0;
